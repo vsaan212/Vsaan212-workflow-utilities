@@ -1,6 +1,6 @@
 [project]
 name = "Vsaan212-workflow-utilities"  # Node ID (immutable once published)
-version = "1.0.3"
+version = "1.0.4"
 description = "Subject & Scenario Selectors (with subfolders), Text Split, and Optional Switch LoRA utilities for ComfyUI."
 readme = "README.md"
 requires-python = ">=3.10"
