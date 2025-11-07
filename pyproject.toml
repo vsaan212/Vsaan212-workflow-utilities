@@ -1,0 +1,26 @@
+[project]
+name = "Vsaan212-workflow-utilities"  # Node ID (immutable once published)
+version = "1.0.2"
+description = "Subject & Scenario Selectors (with subfolders), Text Split, and Optional Switch LoRA utilities for ComfyUI."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+authors = [{ name = "vsaan212" }]
+
+# Optional but nice to have:
+keywords = ["comfyui", "custom-nodes", "prompt", "lora", "workflow", "textsplit"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+]
+
+[project.urls]
+Homepage = "https://github.com/vsaan212/Vsaan212-workflow-utilities"
+Repository = "https://github.com/vsaan212/Vsaan212-workflow-utilities"
+Issues = "https://github.com/vsaan212/Vsaan212-workflow-utilities/issues"
+
+[tool.comfy]
+PublisherId = "evangelist"              # your publisher handle
+DisplayName = "vsaan212"              # what users see in the Registry
+requires-comfyui = ">=1.0.0"          # adjust if you want to target a specific range
