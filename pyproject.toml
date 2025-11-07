@@ -1,6 +1,6 @@
 [project]
-name = "Vsaan212-workflow-utilities"  # Node ID (immutable once published)
-version = "1.0.8"
+name = "Vsaan212-workflow-utils"  # Node ID (immutable once published)
+version = "1.0.0"
 description = "Subject & Scenario Selectors (with subfolders), Text Split, and Optional Switch LoRA utilities for ComfyUI."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -16,9 +16,9 @@ classifiers = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/vsaan212/Vsaan212-workflow-utilities"
-Repository = "https://github.com/vsaan212/Vsaan212-workflow-utilities"
-Issues = "https://github.com/vsaan212/Vsaan212-workflow-utilities/issues"
+Homepage = "https://github.com/vsaan212/Vsaan212-workflow-utils"
+Repository = "https://github.com/vsaan212/Vsaan212-workflow-utils"
+Issues = "https://github.com/vsaan212/Vsaan212-workflow-utils/issues"
 
 [tool.comfy]
 PublisherId = "evangelist"              # your publisher handle
