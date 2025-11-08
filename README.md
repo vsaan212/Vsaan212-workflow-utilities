@@ -50,7 +50,7 @@ Selectors show **relative POSIX paths without the `.txt` extension** and support
 - **Outputs:** chunk_1..chunk_n, remainder (see node UI).
 
 ### Optional Switch LoRA
-- **Purpose:** Pass model/clip through unchanged when “bypass” is selected; otherwise apply LoRA from a provided path.
+- **Purpose:** Pass model/clip through unchanged when “bypass” is the lora name; otherwise apply LoRA from a provided path.
 - **Tip:** Great for A/B testing and clean disabling without graph edits.
 
 ## Troubleshooting
