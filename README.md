@@ -59,5 +59,9 @@ Selectors show **relative POSIX paths without the `.txt` extension** and support
 - **Duplicate filenames in different folders:** Use the full relative path (subfolders disambiguate).
 - **Line endings:** Nodes normalize `\r\n` and `\r` to `\n`.
 
+### Example of how to add this to an existing workflow
+<img width="2409" height="1254" alt="image" src="https://github.com/user-attachments/assets/704942fe-796c-422b-888b-3ebab1fd838c" />
+
+
 ## License
 MIT (see `LICENSE`)
