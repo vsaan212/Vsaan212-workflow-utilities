@@ -1,6 +1,8 @@
 # custom_nodes/vsaan212_workflow_utilities/__init__.py
 import os
 
+WEB_DIRECTORY = "./js"
+
 # --- Robust imports for each submodule (handles legacy filenames too) ---
 # Text Split
 try:
@@ -66,6 +68,12 @@ except Exception:
             NODE_DISPLAY_NAME_MAPPINGS as SUBJ_DISPLAY,
         )
 
+# Lazy Prompt Saver
+from .lazy_prompt_saver import (
+    NODE_CLASS_MAPPINGS as LPS_CLASSES,
+    NODE_DISPLAY_NAME_MAPPINGS as LPS_DISPLAY,
+)
+
 # --- Merge exports for ComfyUI ---
 NODE_CLASS_MAPPINGS = {}
 NODE_DISPLAY_NAME_MAPPINGS = {}
@@ -81,3 +89,6 @@ NODE_DISPLAY_NAME_MAPPINGS.update(SCEN_DISPLAY)
 
 NODE_CLASS_MAPPINGS.update(SUBJ_CLASSES)
 NODE_DISPLAY_NAME_MAPPINGS.update(SUBJ_DISPLAY)
+
+NODE_CLASS_MAPPINGS.update(LPS_CLASSES)
+NODE_DISPLAY_NAME_MAPPINGS.update(LPS_DISPLAY)
