@@ -44,6 +44,10 @@ class ComfyUI_subjectselector:
     FUNCTION = "load_subject"
     CATEGORY = "vsaan212/Selectors"
 
+    @classmethod
+    def IS_CHANGED(cls, **kwargs):
+        return float("NaN")
+
     # ---------- Directory scanning ----------
 
     @classmethod

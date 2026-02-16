@@ -44,6 +44,10 @@ class ComfyUI_ScenarioSelector:
     FUNCTION = "load_scenario"
     CATEGORY = "vsaan212/Selectors"
 
+    @classmethod
+    def IS_CHANGED(cls, **kwargs):
+        return float("NaN")
+
     # ---------- Directory scanning ----------
 
     @classmethod
