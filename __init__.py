@@ -77,6 +77,26 @@ from .lazy_prompt_saver import (
     NODE_DISPLAY_NAME_MAPPINGS as LPS_DISPLAY,
 )
 
+# --- API routes for live folder scanning ---
+from aiohttp import web
+from server import PromptServer
+from .subjectselector.subjectselector import ComfyUI_subjectselector
+from .scenarioselector.scenarioselector import ComfyUI_ScenarioSelector
+
+
+@PromptServer.instance.routes.get("/vsaan212/subjects")
+async def get_subjects(request):
+    ComfyUI_subjectselector.refresh_subjects_list()
+    names = sorted(ComfyUI_subjectselector.subjects_relpaths, key=lambda s: s.lower())
+    return web.json_response(names)
+
+
+@PromptServer.instance.routes.get("/vsaan212/scenarios")
+async def get_scenarios(request):
+    ComfyUI_ScenarioSelector.refresh_scenarios_list()
+    names = sorted(ComfyUI_ScenarioSelector.scenarios_relpaths, key=lambda s: s.lower())
+    return web.json_response(names)
+
 # --- Merge exports for ComfyUI ---
 NODE_CLASS_MAPPINGS = {}
 NODE_DISPLAY_NAME_MAPPINGS = {}
