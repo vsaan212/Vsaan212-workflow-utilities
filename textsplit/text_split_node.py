@@ -26,7 +26,7 @@ class TextSplitNode:
         }
     
     FUNCTION = "split_text"
-    CATEGORY = "vsaan212/Utilities"
+    CATEGORY = "vsaan212/utilities"
 
 
     # For dynamic outputs, we need to handle this differently

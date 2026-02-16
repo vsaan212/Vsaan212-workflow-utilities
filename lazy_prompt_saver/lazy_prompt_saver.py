@@ -67,7 +67,7 @@ class LazyPromptSaver:
     RETURN_TYPES = ("STRING",)
     RETURN_NAMES = ("prompt_text",)
     FUNCTION = "execute"
-    CATEGORY = "Vsaan212/utilities"
+    CATEGORY = "vsaan212/utilities"
     OUTPUT_NODE = False
 
     @classmethod
