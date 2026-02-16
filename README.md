@@ -65,7 +65,7 @@ Selectors show **relative POSIX paths without the `.txt` extension** and support
 
 ## Troubleshooting
 
-- **New files not appearing:** Selector dropdowns now refresh automatically — new `.txt` files are picked up on each queue without restarting ComfyUI.
+- **New files not appearing:** Refresh ComfyUI (hotkey `R`) and the selector dropdowns will pick up any new `.txt` files — no restart needed.
 - **Duplicate filenames in different folders:** Use the full relative path (subfolders disambiguate).
 - **Line endings:** Nodes normalize `\r\n` and `\r` to `\n`.
 

@@ -34,9 +34,6 @@ class ComfyUI_subjectselector:
             "required": {
                 "subject": (subject_choices,),
             },
-            "optional": {
-                "refresh": (["⟳ Refresh Subjects"],),
-            }
         }
 
     RETURN_TYPES = ("STRING", "STRING",)
@@ -70,7 +67,7 @@ class ComfyUI_subjectselector:
 
     # ---------- Node function ----------
 
-    def load_subject(self, subject, refresh=None):
+    def load_subject(self, subject):
         """
         Load the selected subject (relative path without .txt).
         Returns: (file text, preview string).

@@ -34,9 +34,6 @@ class ComfyUI_ScenarioSelector:
             "required": {
                 "scenario": (scenario_choices,),
             },
-            "optional": {
-                "refresh": (["⟳ Refresh Scenarios"],),
-            },
         }
 
     RETURN_TYPES = ("STRING", "STRING",)
@@ -70,7 +67,7 @@ class ComfyUI_ScenarioSelector:
 
     # ---------- Node function ----------
 
-    def load_scenario(self, scenario, refresh=None):
+    def load_scenario(self, scenario):
         """
         Load the selected scenario (relative path without .txt).
         Returns: (file text, preview string).
