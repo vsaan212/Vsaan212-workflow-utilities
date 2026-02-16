@@ -1,11 +1,12 @@
 # Vsaan212-workflow-utilities
 
-Subject & Scenario Selectors (with subfolders), Text Split, and Optional Switch LoRA utilities for ComfyUI.
+Subject & Scenario Selectors (with subfolders), Text Split, Optional Switch LoRA, and Lazy Prompt Saver utilities for ComfyUI.
 
 - **Subject Selector** — load subject `.txt` prompts from `SubjectFiles/` (recursive subfolders supported).
 - **Scenario Selector** — load scenario `.txt` prompts from `ScenarioFiles/` (recursive subfolders supported).
 - **Text Split** — split long prompt text into numbered chunks and a remainder.
 - **Optional Switch LoRA** — quick toggle to bypass or apply a LoRA path without rewiring your graph.
+- **Lazy Prompt Saver** — save, edit, clone, and delete reusable prompt snippets from a persistent local library, all within the ComfyUI graph.
 
 ## Installation
 
@@ -50,12 +51,21 @@ Selectors show **relative POSIX paths without the `.txt` extension** and support
 - **Outputs:** chunk_1..chunk_n, remainder (see node UI).
 
 ### Optional Switch LoRA
-- **Purpose:** Pass model/clip through unchanged when “bypass” is the lora name; otherwise apply LoRA from a provided path.
+- **Purpose:** Pass model/clip through unchanged when "bypass" is the lora name; otherwise apply LoRA from a provided path.
 - **Tip:** Great for A/B testing and clean disabling without graph edits.
+
+### Lazy Prompt Saver
+- **Inputs:** `prompt_name` (string), `prompt_text` (multiline string), `saved_prompts` (dropdown)
+- **Output:** `prompt_text` (STRING) — connect to CLIP Text Encoder or any string input
+- **Buttons:**
+  - **Save** — saves the current name + text to the local `lazy_prompts.json` database
+  - **Clone** — copies the current name with a `_copy` suffix for editing (does not save until you click Save)
+  - **Delete** — removes the selected prompt after confirmation
+- **Notes:** The dropdown updates live after every save/delete. Data persists in `lazy_prompts.json` alongside the node files.
 
 ## Troubleshooting
 
-- **New files not appearing:** Toggle the node’s **Refresh** input to rescan folders.
+- **New files not appearing:** Selector dropdowns now refresh automatically — new `.txt` files are picked up on each queue without restarting ComfyUI.
 - **Duplicate filenames in different folders:** Use the full relative path (subfolders disambiguate).
 - **Line endings:** Nodes normalize `\r\n` and `\r` to `\n`.
 
