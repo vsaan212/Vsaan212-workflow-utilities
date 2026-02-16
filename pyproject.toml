@@ -23,4 +23,4 @@ Issues = "https://github.com/vsaan212/Vsaan212-workflow-utils/issues"
 [tool.comfy]
 PublisherId = "evangelist"              # your publisher handle
 DisplayName = "vsaan212"              # what users see in the Registry
-requires-comfyui = ">=1.0.0"          # adjust if you want to target a specific range
+requires-comfyui = ">= 0.13"          # adjust if you want to target a specific range
