@@ -8,7 +8,7 @@ license = { file = "LICENSE" }
 authors = [{ name = "vsaan212" }]
 
 # Optional but nice to have:
-keywords = ["comfyui", "custom-nodes", "prompt", "lora", "workflow", "textsplit"]
+keywords = ["comfyui", "custom-nodes", "prompt", "lora", "workflow", "textsplit", "prompt select"]
 classifiers = [
   "Programming Language :: Python :: 3",
   "License :: OSI Approved :: MIT License",
