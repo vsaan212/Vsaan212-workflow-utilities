@@ -73,7 +73,7 @@ Install from `requirements.txt` if your ComfyUI environment is missing anything 
 - **Same filename in two folders:** Use the full relative path in the dropdown.
 - **Line endings:** Nodes normalize `\r\n` / `\r` to `\n`.
 
-### Example workflow screenshot
+### Example workflow screenshot (depricated, the new node removes the need for this)
 <img width="2409" height="1254" alt="image" src="https://github.com/user-attachments/assets/704942fe-796c-422b-888b-3ebab1fd838c" />
 
 ## License
