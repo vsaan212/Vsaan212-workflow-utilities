@@ -89,6 +89,7 @@ If there is only **one** path section before the description, that single LoRA i
 
 - Tag line: `[TagName][model_strength][clip_strength]` — bracketed values are optional; missing numbers default to **1.0**.
 - Following lines (until the next tag line) are the **body**: LoRA path, the word `bypass` (case-insensitive), or keyword/description text.
+- Optional lines are not requiered. if not present it will treat it as if it was set to bypass.
 
 **Subject tags (LoRA order)**
 
@@ -132,6 +133,7 @@ a test subject
 Same `#` separators as subject v1, but paths map to stacks separately: **first** path → **high** stack only, **second** → **low** stack only, **last** section → scenario description.
 
 If only **one** path section exists before the description, that LoRA is applied to **both** stacks.
+- Optional lines are not requiered. if not present it will treat it as if it was set to bypass.
 
 ### v2 — tagged
 
