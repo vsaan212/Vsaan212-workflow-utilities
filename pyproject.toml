@@ -1,6 +1,6 @@
 [project]
 name = "Vsaan212-workflow-utilities"  # Node ID (immutable once published)
-version = "1.4.0"
+version = "1.5.0"
 description = "Subject & Scenario Selectors, Text Split, Optional Switch LoRA, Lazy Prompt Saver, and LazyPrompt (multi-target prompt engineer + vision) for ComfyUI."
 readme = "README.md"
 requires-python = ">=3.10"
