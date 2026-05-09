@@ -13,6 +13,18 @@ const SELECTORS = {
         endpoints: [
             { endpoint: "/vsaan212/lazy-subject-scene/subjects", widgetName: "subject" },
             { endpoint: "/vsaan212/lazy-subject-scene/scenarios", widgetName: "scenario" },
+            {
+                endpoint: "/vsaan212/lazy-subject-scene/presets",
+                widgetName: "preset_file",
+                mapValues: (data) => {
+                    const names = Array.isArray(data?.presets)
+                        ? data.presets
+                        : Array.isArray(data)
+                          ? data
+                          : [];
+                    return ["(none)", ...names];
+                },
+            },
         ],
     },
 };
@@ -41,7 +53,10 @@ app.registerExtension({
 
                 fetch(job.endpoint)
                     .then(r => r.json())
-                    .then(names => {
+                    .then((payload) => {
+                        const names = job.mapValues
+                            ? job.mapValues(payload)
+                            : payload;
                         if (!names || names.length === 0) return;
                         const current = widget.value;
                         widget.options.values = names;

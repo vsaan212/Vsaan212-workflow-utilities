@@ -325,5 +325,17 @@ def is_video_model(target_model: str) -> bool:
     return "LTX" in target_model or "Wan" in target_model
 
 
+def default_fps_for_target(target_model: str) -> float:
+    """
+    Default FPS when the Prompt Engineer fps widget is 0 (auto / not overridden).
+    Wan → 16, LTX → 25, everything else → 24.
+    """
+    if "Wan" in target_model:
+        return 16.0
+    if "LTX" in target_model:
+        return 25.0
+    return 24.0
+
+
 def has_audio(target_model: str) -> bool:
     return "LTX" in target_model

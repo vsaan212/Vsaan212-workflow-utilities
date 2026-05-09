@@ -13,16 +13,20 @@ This node reads **only** from:
 
 It does **not** use the folders for [Subject Selector](subject-selector.md) or [Scenario Selector](scenario-selector.md). Copy or symlink `.txt` files if you want the same definitions in both places.
 
+### Default files (seeding)
+
+When the node refreshes its subject/scenario lists (on node creation, **`R`**, or the lazy `/vsaan212/lazy-subject-scene/…` endpoints), it ensures **`SubjectFiles/`** and **`ScenarioFiles/`** exist. If either folder is missing **`none.txt`** or **`Bypass and format example.txt`**, those files are **created** using the current **v2** minimal bypass template (`[LoraHighA]` / `[LoraLowA]` / `[desciption]`). Existing files are **not** overwritten—pull the repo or edit by hand to adopt a new template.
+
 ## Workflow overview
 
 1. Load your checkpoint (or upstream stack) into **two** model branches if your workflow expects separate high/low noise models.
 2. Connect **`model_high`** / **`clip_high`** and **`model_low`** / **`clip_low`** from those branches.
 3. Pick **`subject`** and **`scenario`** from the dropdowns (`.txt` paths without extension).
-4. Optional: fill **`prepend_text`** and **`post_text`** for framing around the subject description.
+4. Optional: connect **`prepend_text`** / **`post_text`** (STRING sockets only) for framing around the subject description—no on-node multiline boxes; the extension shows **live** subject/scenario file text instead.
 5. Use **`prompt`** for CLIP / preview / downstream text; use **`model_high`**, **`model_low`**, **`clip_high`**, **`clip_low`** as the conditioned outputs for the rest of the graph.
 6. Use **`keywords`** for trigger tags or secondary conditioning if your workflow needs them.
 
-Dropdown lists refresh when the node is created; use ComfyUI **`R`** after adding new `.txt` files. Endpoints: `/vsaan212/lazy-subject-scene/subjects` and `…/scenarios`.
+Dropdown lists refresh when the node is created; use ComfyUI **`R`** after adding new `.txt` files. Endpoints: `/vsaan212/lazy-subject-scene/subjects`, `…/scenarios`, and `…/presets` (see below).
 
 ## Inputs
 
@@ -34,8 +38,10 @@ Dropdown lists refresh when the node is created; use ComfyUI **`R`** after addin
 | `clip_low` | CLIP | Patched alongside `model_low`. |
 | `subject` | dropdown | `.txt` under `lazy_subject_scene_automation/SubjectFiles/` (recursive). |
 | `scenario` | dropdown | `.txt` under `lazy_subject_scene_automation/ScenarioFiles/` (recursive). |
-| `prepend_text` | STRING | Prepended to the built prompt (see [Prompt output layout](#prompt-output-layout)). |
-| `post_text` | STRING | Inserted after the subject description, before the scenario description. |
+| `preset_file` | dropdown | JSON presets under `lazy_subject_scene_automation/Presets/` (no `.json` in the list). `js/lazy_subject_scene_live.js` loads a preset into the dropdowns + live panes; **`Save preset`** writes one JSON snapshot. |
+| `pass_subject_to_main_prompt` | BOOLEAN | As before. |
+| `prepend_text` | STRING (optional, **socket only**) | Wired text prepended to the built prompt; empty if unconnected. |
+| `post_text` | STRING (optional, **socket only**) | Wired text after the subject block; empty if unconnected. |
 
 ## Outputs
 
@@ -50,14 +56,14 @@ Dropdown lists refresh when the node is created; use ComfyUI **`R`** after addin
 
 On each branch, LoRAs are applied in order:
 
-1. **Subject:** primary → optional A → optional B  
-2. **Scenario:** primary → optional A → optional B  
+1. **Subject:** slot A → slot B → slot C (`LoraHighA` / `LoraLowA` through `LoraHighC` / `LoraLowC` in the subject file).
+2. **Scenario:** slot A → slot B → slot C (same tag names in the scenario file).
 
 Paths can be absolute or names discoverable by ComfyUI’s `LoraLoader`. Missing optional sections in the file behave like **bypass**.
 
 ## Wan 2.1 vs 2.2 (no separate low file)
 
-If a **low** slot is missing or set to `bypass` while the matching **high** slot has a real path, the node uses **Wan 2.1 style**: the same LoRA is applied on **both** branches; on the **low** branch **clip strength is forced to 1.0** (the high branch uses strengths from the file). This applies to subject primary, subject optionals, and scenario blocks that share the same high/low pairing rules.
+If a **low** slot is missing or set to `bypass` while the matching **high** slot has a real path, the node uses **Wan 2.1 style**: the same LoRA is applied on **both** branches; on the **low** branch **clip strength is forced to 1.0** (the high branch uses strengths from the file). This applies to subject and scenario blocks that share the same high/low pairing rules.
 
 ---
 
@@ -91,30 +97,32 @@ If there is only **one** path section before the description, that single LoRA i
 - Following lines (until the next tag line) are the **body**: LoRA path, the word `bypass` (case-insensitive), or keyword/description text.
 - Optional lines are not requiered. if not present it will treat it as if it was set to bypass.
 
-**Subject tags (LoRA order)**
+**Subject tags (LoRA order)** — same slot names as in scenario files; meaning comes from which folder the file lives in.
 
 | Tag | Role |
 |-----|------|
-| `SubjectLoraHigh` / `SubjectLoraLow` | Primary subject LoRAs. |
-| `OptionalLoraAHigh` / `OptionalLoraAlow` | Optional pair A (`OptionalLoraALow` accepted). |
-| `OptionalLoraBHigh` / `OptionalLoraBlow` | Optional pair B (`OptionalLoraBLow` accepted). |
+| `LoraHighA` / `LoraLowA` | Primary subject LoRAs (slot A). |
+| `LoraHighB` / `LoraLowB` | Optional pair (slot B). |
+| `LoraHighC` / `LoraLowC` | Optional pair (slot C). |
 | `KeywordA` / `KeywordB` / `KeywordC` | Merged into `keywords` output. |
 | `description` or `desciption` | Subject description in the final `prompt`. |
+
+**Deprecated (still read):** `SubjectLoraHigh` / `SubjectLoraLow` for slot A; `OptionalLoraAHigh` / `OptionalLoraAlow` for slot B; `OptionalLoraBHigh` / `OptionalLoraBlow` for slot C. Prefer the `LoraHigh*` / `LoraLow*` names in new files.
 
 Example (mixed optional + bypass):
 
 ```text
-[SubjectLoraHigh][1.0]
+[LoraHighA][1.0]
 wan lora\girls\testH.safetensors
-[SubjectLoraLow][1.0]
+[LoraLowA][1.0]
 wan lora\girls\testL.safetensors
-[OptionalLoraAHigh][1.0]
+[LoraHighB][1.0]
 wan lora\bodytype\slimH.safetensors
-[OptionalLoraAlow][1.0]
+[LoraLowB][1.0]
 wan lora\bodytype\slimL.safetensors
-[OptionalLoraBHigh][1.0]
+[LoraHighC][1.0]
 bypass
-[OptionalLoraBlow][1.0]
+[LoraLowC][1.0]
 bypass
 [KeywordA]
 T3st
@@ -122,6 +130,16 @@ T3st
 Sl1m
 [desciption]
 a test subject
+```
+
+Minimal bypass-only example (no LoRAs; description only):
+
+```text
+[LoraHighA]
+Bypass
+[LoraLowA]
+bypass
+[desciption]
 ```
 
 ---
@@ -139,32 +157,54 @@ If only **one** path section exists before the description, that LoRA is applied
 
 | Tag | Role |
 |-----|------|
-| `ScenarioLoraHigh` / `ScenarioLoraLow` | Main scenario LoRAs. |
-| `OptionalScenarioALoraHigh` / `OptionalScenarioALoraLow` | Optional pair A. |
-| `OptionalScenarioBLoraHigh` / `OptionalScenarioBLoraLow` | Optional pair B. |
+| `LoraHighA` / `LoraLowA` | Main scenario LoRAs (slot A). |
+| `LoraHighB` / `LoraLowB` | Optional pair (slot B). |
+| `LoraHighC` / `LoraLowC` | Optional pair (slot C). |
 | `KeywordA` / `KeywordB` / `KeywordC` | Appended after subject keywords in `keywords`. |
 | `description` or `desciption` | Scenario text; appears after the subject block in `prompt`. |
+
+**Deprecated (still read):** `ScenarioLoraHigh` / `ScenarioLoraLow` for slot A; `OptionalScenarioALoraHigh` / `OptionalScenarioALoraLow` for slot B; `OptionalScenarioBLoraHigh` / `OptionalScenarioBLoraLow` for slot C.
 
 Example:
 
 ```text
-[ScenarioLoraHigh][1.0][0.7]
+[LoraHighA][1.0][0.7]
 wan lora\wan2.2 loras\both i2v and t2v\Aesthetics\23High noise-Aesthetics.safetensors
-[ScenarioLoraLow][1.0][0.7]
+[LoraLowA][1.0][0.7]
 wan lora\wan2.2 loras\both i2v and t2v\Aesthetics\56Low noise-Aesthetics.safetensors
-[OptionalScenarioALoraHigh][1.0]
+[LoraHighB][1.0]
 wan lora\...\56Low noise-Jump.safetensors
-[OptionalScenarioALoraLow][1.0]
+[LoraLowB][1.0]
 wan lora\...\56Low noise-Jump.safetensors
-[OptionalScenarioBLoraHigh][1.0]
+[LoraHighC][1.0]
 bypass
-[OptionalScenarioBLoraLow][1.0]
+[LoraLowC][1.0]
 bypass
 [KeywordA]
 Aesthetics
 [desciption]
 A blond girl jumps on a trampoline
 ```
+
+---
+
+## Live preview, presets, and HTTP API
+
+The extension **`js/lazy_subject_scene_live.js`** (loaded via the pack `WEB_DIRECTORY`):
+
+- Shows **read-only** live text for the selected **subject** and **scenario** `.txt` files (refreshed when those combos change, without running the graph).
+- Shows an editable **`scenario_template`** area used only for **preset JSON** (default structure uses v2 tags `LoraHighA` … `LoraLowC`, `KeywordA`–`KeywordC`, `desciption`). Execution still reads **disk** scenario files from the **`scenario`** dropdown; the template is stored in presets for your next workflow step.
+- **`Save preset`** prompts for a name and `POST`s to **`/vsaan212/lazy-subject-scene/save_preset`**, then refreshes the live panes. After a successful save, the server emits WebSocket event **`vsaan212.lazy_subject_scene.presets`** so all lazy nodes update their **`preset_file`** lists without reloading the page.
+
+| Method | Path | Body / notes |
+|--------|------|----------------|
+| `GET` | `/vsaan212/lazy-subject-scene/presets` | Returns `{"presets": ["rel/path", ...]}` (no `(none)`). |
+| `GET` | `/vsaan212/lazy-subject-scene/default_scenario_template` | Returns `{"scenario_template": "..."}` for seeding the preset editor. |
+| `POST` | `/vsaan212/lazy-subject-scene/read_pair` | JSON `{"subject":"rel","scenario":"rel"}` → `subject_text`, `scenario_text`, optional `subject_error` / `scenario_error`. |
+| `POST` | `/vsaan212/lazy-subject-scene/load_preset` | JSON `{"preset":"rel/no_ext"}` → preset fields + embedded file texts. |
+| `POST` | `/vsaan212/lazy-subject-scene/save_preset` | JSON `name`, `subject`, `scenario`, `prepend_text`, `post_text`, `pass_subject_to_main_prompt`, `scenario_template` → writes `Presets/{name}.json`. |
+
+Legacy alias: `load_preset` also accepts `"filename"` instead of `"preset"`.
 
 ---
 

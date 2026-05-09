@@ -108,6 +108,22 @@ except Exception:
     LP_CLASSES = {}
     LP_DISPLAY = {}
 
+# Prompt Garnish (pick one phrase line, append with joiner)
+try:
+    from .prompt_garnish.prompt_garnish import (
+        NODE_CLASS_MAPPINGS as PG_CLASSES,
+        NODE_DISPLAY_NAME_MAPPINGS as PG_DISPLAY,
+    )
+except Exception:
+    try:
+        from .prompt_garnish import (
+            NODE_CLASS_MAPPINGS as PG_CLASSES,
+            NODE_DISPLAY_NAME_MAPPINGS as PG_DISPLAY,
+        )
+    except Exception:
+        PG_CLASSES = {}
+        PG_DISPLAY = {}
+
 # --- API routes for live folder scanning ---
 from aiohttp import web
 from server import PromptServer
@@ -147,6 +163,59 @@ if LazySubjectSceneAutomation is not None:
         )
         return web.json_response(names)
 
+    from .lazy_subject_scene_automation.lazy_subject_scene_automation import (
+        DEFAULT_SCENARIO_TEMPLATE,
+        LAZY_PRESET_WS_EVENT,
+    )
+
+    @PromptServer.instance.routes.get("/vsaan212/lazy-subject-scene/presets")
+    async def get_lazy_presets(request):
+        return web.json_response(LazySubjectSceneAutomation.api_list_presets())
+
+    @PromptServer.instance.routes.get(
+        "/vsaan212/lazy-subject-scene/default_scenario_template"
+    )
+    async def get_lazy_default_scenario_template(request):
+        return web.json_response({"scenario_template": DEFAULT_SCENARIO_TEMPLATE})
+
+    @PromptServer.instance.routes.post("/vsaan212/lazy-subject-scene/read_pair")
+    async def post_lazy_read_pair(request):
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        data = LazySubjectSceneAutomation.api_read_pair(
+            body.get("subject") or "none",
+            body.get("scenario") or "none",
+        )
+        return web.json_response(data)
+
+    @PromptServer.instance.routes.post("/vsaan212/lazy-subject-scene/load_preset")
+    async def post_lazy_load_preset(request):
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        preset = body.get("preset") or body.get("filename") or ""
+        data = LazySubjectSceneAutomation.api_load_preset(str(preset))
+        return web.json_response(data)
+
+    @PromptServer.instance.routes.post("/vsaan212/lazy-subject-scene/save_preset")
+    async def post_lazy_save_preset(request):
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response({"error": "invalid JSON"}, status=400)
+        result = LazySubjectSceneAutomation.api_save_preset(body)
+        if result.get("ok"):
+            LazySubjectSceneAutomation.refresh_presets_list()
+            PromptServer.instance.send_sync(
+                LAZY_PRESET_WS_EVENT,
+                {"presets": LazySubjectSceneAutomation.presets_relpaths},
+            )
+        status = 400 if result.get("error") else 200
+        return web.json_response(result, status=status)
+
 # --- Merge exports for ComfyUI ---
 NODE_CLASS_MAPPINGS = {}
 NODE_DISPLAY_NAME_MAPPINGS = {}
@@ -171,3 +240,6 @@ NODE_DISPLAY_NAME_MAPPINGS.update(LPS_DISPLAY)
 
 NODE_CLASS_MAPPINGS.update(LP_CLASSES)
 NODE_DISPLAY_NAME_MAPPINGS.update(LP_DISPLAY)
+
+NODE_CLASS_MAPPINGS.update(PG_CLASSES)
+NODE_DISPLAY_NAME_MAPPINGS.update(PG_DISPLAY)

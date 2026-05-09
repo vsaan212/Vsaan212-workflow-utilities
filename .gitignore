@@ -46,3 +46,6 @@ lazy_prompts.json
 htmlcov/
 node.zip
 
+# Local packaging manifest (do not commit)
+.tracking
+

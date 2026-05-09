@@ -24,7 +24,12 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from .environment_presets import ENVIRONMENT_PRESETS
 from .message_builder import build_prompt_augmentation, split_positive_negative_block
-from .system_prompts import TARGET_MODELS, get_system_prompt, is_video_model
+from .system_prompts import (
+    TARGET_MODELS,
+    default_fps_for_target,
+    get_system_prompt,
+    is_video_model,
+)
 
 
 def _comfy_image_to_jpeg_data_url(image_tensor, max_side: int = 768) -> str:
@@ -101,6 +106,13 @@ _GENERIC_IMAGE_NEG = (
     "extra limbs, missing fingers, watermark, text, ugly, duplicate, out of frame"
 )
 
+# Added to video/image pacing instructions (soft target) and min_new_tokens lower bound.
+# Bump or set to 0 when re-tuning pacing caps.
+_TOKEN_BUDGET_PAD = 1000
+
+# Hard cap on completion length: HF `max_new_tokens` and LM Studio `max_tokens`.
+_MAX_OUTPUT_TOKENS = 5000
+
 
 class LazyPromptEngineer:
     @classmethod
@@ -151,21 +163,21 @@ class LazyPromptEngineer:
                 "invent_dialogue": ("BOOLEAN", {"default": True, "tooltip": "Video targets: when ON, invent inline dialogue; when OFF, only quoted user dialogue or silence."}),
                 "keep_model_loaded": ("BOOLEAN", {"default": False, "tooltip": "Keep the local HF model in VRAM between runs. Off frees VRAM after each run."}),
                 "offline_mode": ("BOOLEAN", {"default": False, "tooltip": "ON = no HuggingFace network; local cache / paths only."}),
-                "frame_count": ("INT", {
-                    "default": 192,
-                    "min": 24,
-                    "max": 2000,
-                    "step": 1,
+                "video_length": ("FLOAT", {
+                    "default": 8.0,
+                    "min": 0.25,
+                    "max": 300.0,
+                    "step": 0.25,
                     "display": "number",
-                    "tooltip": "Clip length in frames (video targets). Also used for image targets as optional context.",
+                    "tooltip": "Video duration in seconds (video targets). Frame count for hints = length × fps. Image targets ignore this.",
                 }),
                 "fps": ("INT", {
-                    "default": 24,
-                    "min": 1,
+                    "default": 0,
+                    "min": 0,
                     "max": 60,
                     "step": 1,
                     "display": "number",
-                    "tooltip": "Frames per second for video pacing math. Match your sampler (e.g. 24 or 25).",
+                    "tooltip": "0 = auto from target model (Wan 16, LTX 25, else 24). Set >0 to override.",
                 }),
                 "env_seed": ("INT", {
                     "default": 0,
@@ -197,6 +209,14 @@ class LazyPromptEngineer:
                     "multiline": False,
                     "placeholder": "Model id as shown in LM Studio",
                     "tooltip": "Required when model is LM Studio (API). LM Studio must be running on localhost:1234.",
+                }),
+                "lm_studio_ttl": ("INT", {
+                    "default": 5,
+                    "min": 0,
+                    "max": 3600,
+                    "step": 1,
+                    "display": "number",
+                    "tooltip": "LM Studio only: idle seconds before the model unloads after this request (JSON ttl). 0 = omit (server default, often long).",
                 }),
                 "system_prompt": ("STRING", {
                     "default": "",
@@ -618,7 +638,15 @@ IMPORTANT: Output ONLY the expanded prompt. Do NOT include preamble, commentary,
         "<end_of_turn>", "[/INST]", "### Human", "### Assistant",
     ]
 
-    def _generate_via_lm_studio(self, messages, model_name: str, temperature: float, max_tokens: int, stop: list) -> str:
+    def _generate_via_lm_studio(
+        self,
+        messages,
+        model_name: str,
+        temperature: float,
+        max_tokens: int,
+        stop: list,
+        ttl_seconds: int = 0,
+    ) -> str:
         """Call LM Studio OpenAI-compatible API; returns raw assistant content."""
         url = "http://localhost:1234/v1/chat/completions"
         body = {
@@ -629,6 +657,8 @@ IMPORTANT: Output ONLY the expanded prompt. Do NOT include preamble, commentary,
             "stop": stop,
             "top_p": 0.9,
         }
+        if ttl_seconds and ttl_seconds > 0:
+            body["ttl"] = int(ttl_seconds)
         data = json.dumps(body).encode("utf-8")
         req = urllib.request.Request(
             url,
@@ -674,13 +704,14 @@ IMPORTANT: Output ONLY the expanded prompt. Do NOT include preamble, commentary,
         invent_dialogue,
         keep_model_loaded,
         offline_mode,
-        frame_count,
+        video_length,
         fps,
         env_seed,
         model,
         local_path_8b,
         local_path_3b,
         lm_studio_model,
+        lm_studio_ttl,
         system_prompt,
         scene_context="",
         lora_triggers="",
@@ -715,11 +746,13 @@ IMPORTANT: Output ONLY the expanded prompt. Do NOT include preamble, commentary,
 
         is_vid = is_video_model(target_model)
         screen_use = bool(screenplay_mode and "LTX" in target_model)
-        fps_f = float(fps)
+        fps_f = float(fps) if int(fps) > 0 else default_fps_for_target(target_model)
 
-        # --- Timing & pacing (video) vs image token budget ---
+        # --- Video: length in seconds × fps → frame count for LLM hints; beats from seconds ---
         if is_vid:
-            real_seconds = frame_count / max(fps_f, 1e-6)
+            real_seconds = max(float(video_length), 0.25)
+            frame_count = int(round(real_seconds * fps_f))
+            frame_count = max(1, min(frame_count, 2000))
             action_count = max(1, min(10, round(real_seconds / 4)))
             if action_count == 1:
                 pacing_hint = (
@@ -738,9 +771,14 @@ IMPORTANT: Output ONLY the expanded prompt. Do NOT include preamble, commentary,
                     f"Dialogue counts as an action if it interrupts the physical scene — budget it inside one of your {action_count} beats, not as an extra beat. "
                     f"HARD STOP after the {ordinal} action is complete. The scene ends there. Do not write a {action_count + 1}th action under any circumstances."
                 )
-            token_val = max(256, min(1200, action_count * 120))
-            max_tokens_actual = int(token_val * 1.05)
-            min_tokens = int(token_val * 0.75)
+            # Soft target for the pacing line (wider than old 1200 cap) — actual stop is _MAX_OUTPUT_TOKENS.
+            base_val = max(
+                500,
+                min(4000, max(action_count * 200, int(max(real_seconds, 0.25) * 35))),
+            )
+            token_val = max(256, base_val) + _TOKEN_BUDGET_PAD
+            max_tokens_actual = _MAX_OUTPUT_TOKENS
+            min_tokens = min(int(token_val * 0.75), _MAX_OUTPUT_TOKENS - 200)
             length_instruction = (
                 f"\n[PACING — THIS IS MANDATORY: {pacing_hint} "
                 f"Write approximately {token_val} tokens total. "
@@ -749,15 +787,16 @@ IMPORTANT: Output ONLY the expanded prompt. Do NOT include preamble, commentary,
                 f"the scene ends with the last sentence of prose. Nothing after it. No brackets. No notes. No confirmation.]"
             )
             print(
-                f"[LazyPrompt] Video token budget: {token_val} target / {max_tokens_actual} max "
-                f"(actions: {action_count}, frames: {frame_count}, fps: {fps_f:g}, seconds: {real_seconds:.0f})"
+                f"[LazyPrompt] Video token budget: ~{token_val} soft target / {max_tokens_actual} max new tokens "
+                f"(actions: {action_count}, length: {real_seconds:g}s, frames≈{frame_count}, fps: {fps_f:g})"
             )
         else:
             real_seconds = 0.0
+            frame_count = 0
             action_count = 1
-            token_val = 768
-            max_tokens_actual = 1024
-            min_tokens = 128
+            token_val = 768 + _TOKEN_BUDGET_PAD
+            max_tokens_actual = _MAX_OUTPUT_TOKENS
+            min_tokens = min(128 + _TOKEN_BUDGET_PAD, _MAX_OUTPUT_TOKENS - 200)
             length_instruction = (
                 "\n[FORMAT: Follow the system prompt exactly for the image target. "
                 "No preamble, no meta commentary, no token counts.]\n"
@@ -1062,6 +1101,7 @@ IMPORTANT: Output ONLY the expanded prompt. Do NOT include preamble, commentary,
                 temperature=temperature,
                 max_tokens=max_tokens_actual,
                 stop=self.LM_STUDIO_STOP,
+                ttl_seconds=int(lm_studio_ttl or 0),
             )
             result = self._clean_output(result)
             result, neg_prompt = self._finalize_output(target_model, result, user_input)
