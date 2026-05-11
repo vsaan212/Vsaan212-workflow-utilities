@@ -15,14 +15,8 @@ def main():
         + "\n"
     )
     (_HERE / "environment_presets.py").write_text(env, encoding="utf-8")
-    sys_h = (
-        '"""Target-model system prompts and router (LazyPrompt). '
-        'Ported from Gemma4Prompt."""\n\n'
-        + "\n".join(lines[921:1248])
-        + "\n"
-    )
-    (_HERE / "system_prompts.py").write_text(sys_h, encoding="utf-8")
-    print("OK", len(lines[45:916]), len(lines[921:1248]))
+    # System prompts now live in lazyprompt/system_prompts.json (editable defaults).
+    print("OK", len(lines[45:916]), "(environment_presets only; edit system_prompts.json for templates)")
 
 
 if __name__ == "__main__":

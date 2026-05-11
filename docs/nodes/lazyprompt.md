@@ -10,13 +10,15 @@ Three related nodes for LLM-assisted prompting inside ComfyUI.
 
 **Credits:** upstream design from LTX2EasyPrompt-LD and Gemma4Prompt (MIT); see the main [README](../../README.md#credits).
 
+**Deep dive:** [how prompt enhancement and `system_prompt` override work](lazyprompt-prompt-enhancement.md).
+
 ## LazyPrompt — Prompt Engineer
 
 **Purpose:** Expand a short user idea into a long-form prompt tuned for a **target model** (LTX Video, Wan, Flux, SDXL, Pony, SD 1.5).
 
 ### Workflow wiring
 
-1. Choose **`target_model`** so the correct system prompt and pacing rules apply (video vs image token budgets differ).
+1. Choose **`target_model`** so the correct JSON system template and pacing rules apply (**`None`** = no default template; optional minimal mode with override — see [lazyprompt-prompt-enhancement.md](lazyprompt-prompt-enhancement.md)). Video vs image token budgets differ.
 2. Set **`model`** to either a **local Hugging Face** Gemma-style LLM (8B/3B paths) or **LM Studio (API)**.
 3. Enter your idea in **`user_input`** (and optional **`character`**, **`lora_triggers`**, **`environment`** preset).
 4. Optional **`scene_context`** — connect text from **Vision Describe** or any frame/scene description.
@@ -27,6 +29,7 @@ Three related nodes for LLM-assisted prompting inside ComfyUI.
 ### Operational tips
 
 - Match **frame_count / fps** to your video node so length hints align with clip duration.
+- **`max_output_tokens`** — hard cap for generated completion length (HF / LM Studio). Default **900**; pacing asks for **~⅓** of that (~300 tokens). Raise for longer cinematic prompts (e.g. **4500** max → ~**1500** target).
 - **`keep_model_loaded`** saves reload time at the cost of VRAM; use **Unload local model** when done.
 - **`offline_mode`** + **`local_path`** for HF models when you do not want hub access.
 

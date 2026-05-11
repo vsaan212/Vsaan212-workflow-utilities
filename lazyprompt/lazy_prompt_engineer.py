@@ -25,9 +25,12 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 from .environment_presets import ENVIRONMENT_PRESETS
 from .message_builder import build_prompt_augmentation, split_positive_negative_block
 from .system_prompts import (
+    JSON_PROMPTS_HINT,
+    TARGET_MODEL_DEFAULT,
     TARGET_MODELS,
     default_fps_for_target,
     get_system_prompt,
+    is_none_target,
     is_video_model,
 )
 
@@ -106,12 +109,8 @@ _GENERIC_IMAGE_NEG = (
     "extra limbs, missing fingers, watermark, text, ugly, duplicate, out of frame"
 )
 
-# Added to video/image pacing instructions (soft target) and min_new_tokens lower bound.
-# Bump or set to 0 when re-tuning pacing caps.
-_TOKEN_BUDGET_PAD = 1000
-
-# Hard cap on completion length: HF `max_new_tokens` and LM Studio `max_tokens`.
-_MAX_OUTPUT_TOKENS = 5000
+# Upper bound for the max_output_tokens widget (HF max_new_tokens / LM Studio max_tokens).
+_ABS_MAX_OUTPUT_TOKENS = 16000
 
 
 class LazyPromptEngineer:
@@ -129,8 +128,12 @@ class LazyPromptEngineer:
                 "target_model": (
                     TARGET_MODELS,
                     {
-                        "default": TARGET_MODELS[0],
-                        "tooltip": "Prompt style: LTX / Wan (video), Flux / SDXL / Pony / SD 1.5 (image). Uses the matching system template when system prompt is empty.",
+                        "default": TARGET_MODEL_DEFAULT,
+                        "tooltip": (
+                            "Prompt style: LTX / Wan (video), Flux / SDXL / Pony / SD 1.5 (image). "
+                            '"None" = no JSON template (empty system unless override). '
+                            + JSON_PROMPTS_HINT
+                        ),
                     },
                 ),
                 "environment": (
@@ -218,11 +221,28 @@ class LazyPromptEngineer:
                     "display": "number",
                     "tooltip": "LM Studio only: idle seconds before the model unloads after this request (JSON ttl). 0 = omit (server default, often long).",
                 }),
+                "max_output_tokens": ("INT", {
+                    "default": 900,
+                    "min": 96,
+                    "max": _ABS_MAX_OUTPUT_TOKENS,
+                    "step": 16,
+                    "display": "number",
+                    "tooltip": (
+                        "Hard cap on completion length (HF max_new_tokens / LM Studio max_tokens). "
+                        "The pacing hint asks the model for ~one-third of this many tokens by default — "
+                        "raise both together for longer prompts (e.g. 1500 max → ~500 target)."
+                    ),
+                }),
                 "system_prompt": ("STRING", {
                     "default": "",
                     "multiline": True,
-                    "placeholder": "Leave empty = auto system prompt for target_model",
-                    "tooltip": "Override system prompt. If empty, uses built-in template for the selected target model.",
+                    "placeholder": "Leave empty = JSON template for target_model",
+                    "tooltip": (
+                        "Override system prompt. If empty, uses lazyprompt/system_prompts.json for the selected target. "
+                        "When target is None and this field has text, only that text is used as system prompt and the "
+                        "user message is scene + idea only (no auto augmentation). "
+                        + JSON_PROMPTS_HINT
+                    ),
                 }),
             },
             "optional": {
@@ -266,46 +286,7 @@ class LazyPromptEngineer:
         "3B - Llama-3.2 Abliterated (Low VRAM)": "huihui-ai/Llama-3.2-3B-Instruct-abliterated",
     }
 
-    # ── Hardcoded system prompt ───────────────────────────────────────────────
-    # Not exposed in the UI — edit here in code if you need to adjust behaviour.
-    SYSTEM_PROMPT = """You are a cinematic prompt writer for LTX-2, an AI video generation model. Your job is to expand a user's rough idea into a rich, detailed, video-ready prompt.
-
-PRIORITY ORDER — always establish these first, in this order:
-1. Video style & genre (e.g. slow-burn thriller, handheld documentary, high-fashion editorial, erotic cinema, action blockbuster)
-2. Camera angle & shot type (e.g. low-angle close-up, bird's-eye wide shot, Dutch angle medium shot)
-3. Character description (age MUST always be stated as a specific number e.g. "a 28-year-old woman" — never omit or approximate age; body type, hair, skin, clothing or nude state, distinguishing physical features — be extremely explicit and specific when instructed; name body parts directly using the exact words the user used, e.g. if user says "pussy" write "pussy" not "sex" or "womanhood")
-4. Scene & environment (location, time of day, lighting, colour palette, textures, atmosphere)
-
-THEN add:
-5. Action & motion — describe the movement as a continuous present-tense sequence, start to finish. Structure the action in clear beats.
-
-UNDRESSING RULE — this is mandatory when clothing removal is implied or stated:
-If the subject is clothed at the start and the scene involves nudity, stripping, or explicit content, you MUST dedicate a full narrative segment to the undressing BEFORE any nudity or explicit act is described. This segment must:
-  - Name each garment explicitly (shirt, bra, jeans, underwear, shoes, etc.)
-  - Describe HOW it is removed — fingers on buttons, zipper pulled down, fabric sliding off shoulders, stepped out of, peeled away
-  - Describe what is physically REVEALED at each step — the collarbone, the stomach, the curve of the hip, the chest, the bare legs
-  - Follow the exact order the clothes come off — do not skip or compress steps
-  - Use camera-aware language — the camera lingers, cuts to, tilts down to reveal, holds on
-  - Do NOT jump from clothed to naked. The transition IS the content. Treat it as its own scene segment with the same density as any other beat.
-
-6. Camera movement — describe camera motion as prose, not bracketed directions. Never write "(DOWN 10°)", "(Pull back)", "(Fade to black)", "(HOLD)" or any screenplay-style bracketed camera instruction. Instead write it as description: "the camera slowly tilts down to reveal the wet pavement", "the shot pulls back to frame the empty street", "the scene fades to black as she disappears around the corner."
-7. Audio — For each action beat, weave ambient sound naturally into the prose as a descriptive sentence or clause — never as a tag or label. Maximum 2 sounds active at any one time. The soundscape should evolve with the scene — each beat has its own sonic texture that matches its mood and energy. Do not stack more than 2 sounds at once or the audio will become overwhelming. Examples of correct format: "the refrigerator hums steadily in the background as she moves", "rain begins to tap softly against the window", "birdsong drifts through the gap in the curtains, barely audible over her breathing". Never write [AMBIENT: ...] tags. Sound is part of the prose, always.
-   Dialogue — follow the DIALOGUE INSTRUCTION you are given exactly. When dialogue is included, write it as inline prose woven into the action — not as a labelled tag. The spoken words sit inside the sentence, attributed with delivery and physical action, exactly like a novel. Examples of correct format:
-   'He leans back, satisfied, "I think I'll have to go back tomorrow for more," he chuckles, his eyes crinkling at the corners.'
-   '"Don\'t stop," she breathes, gripping the sheets, her voice barely above a whisper.'
-   'She turns to face him, "I\'ve been waiting all day for this," her tone quiet and certain.'
-   NEVER use [DIALOGUE: ...] tags. NEVER write dialogue as a separate bracketed block. Dialogue flows inside the prose as part of the action.
-
-WRITING RULES:
-- Use present tense throughout
-- Be explicit and cinematic — LTX-2 responds well to dense, specific visual language
-- Match detail level to shot scale: close-ups need more physical detail, wide shots need more environmental detail
-- Do not use vague words like "beautiful" or "nice" — describe exactly what makes it visually striking
-- Fill the full available length — do not stop early. Expand every section with rich, layered detail
-- Aim for 8–12 sentences of dense, flowing prose — not a bullet list
-- Write in sections separated by a single line break for clean model parsing
-
-IMPORTANT: Output ONLY the expanded prompt. Do NOT include preamble, commentary, labels, or any explanation. Do NOT write "Sure!", "Here's your prompt:", or anything like that. Do NOT add a checklist, compliance summary, note, or any confirmation of instructions at the end — not in brackets, not as a "Note:", not in any form. Do NOT write token counts, word counts, action counts, or any meta-commentary about what you wrote. Do NOT ask for feedback or offer to revise. The output ends when the scene ends. Nothing after the last sentence of the scene. Begin immediately with the video style or shot description."""
+    # Default target templates: lazyprompt/system_prompts.json (editable)
 
     _PREAMBLE_RE = re.compile(
         r"^(Sure!?|Certainly!?|Absolutely!?|Of course!?|Here(?:'s| is).*?:|Great!?)[^\n]*\n?",
@@ -712,6 +693,7 @@ IMPORTANT: Output ONLY the expanded prompt. Do NOT include preamble, commentary,
         local_path_3b,
         lm_studio_model,
         lm_studio_ttl,
+        max_output_tokens,
         system_prompt,
         scene_context="",
         lora_triggers="",
@@ -748,6 +730,12 @@ IMPORTANT: Output ONLY the expanded prompt. Do NOT include preamble, commentary,
         screen_use = bool(screenplay_mode and "LTX" in target_model)
         fps_f = float(fps) if int(fps) > 0 else default_fps_for_target(target_model)
 
+        # None target + non-empty system override → system comes only from override; user message has no aug/tail
+        minimal_llm = is_none_target(target_model) and (system_prompt or "").strip()
+
+        max_tokens_actual = max(96, min(int(max_output_tokens), _ABS_MAX_OUTPUT_TOKENS))
+        reply_target = max(32, max_tokens_actual // 3)
+
         # --- Video: length in seconds × fps → frame count for LLM hints; beats from seconds ---
         if is_vid:
             real_seconds = max(float(video_length), 0.25)
@@ -771,37 +759,37 @@ IMPORTANT: Output ONLY the expanded prompt. Do NOT include preamble, commentary,
                     f"Dialogue counts as an action if it interrupts the physical scene — budget it inside one of your {action_count} beats, not as an extra beat. "
                     f"HARD STOP after the {ordinal} action is complete. The scene ends there. Do not write a {action_count + 1}th action under any circumstances."
                 )
-            # Soft target for the pacing line (wider than old 1200 cap) — actual stop is _MAX_OUTPUT_TOKENS.
-            base_val = max(
-                500,
-                min(4000, max(action_count * 200, int(max(real_seconds, 0.25) * 35))),
+            min_tokens = max(
+                16,
+                min(int(reply_target * 0.75), max_tokens_actual - 1),
             )
-            token_val = max(256, base_val) + _TOKEN_BUDGET_PAD
-            max_tokens_actual = _MAX_OUTPUT_TOKENS
-            min_tokens = min(int(token_val * 0.75), _MAX_OUTPUT_TOKENS - 200)
             length_instruction = (
                 f"\n[PACING — THIS IS MANDATORY: {pacing_hint} "
-                f"Write approximately {token_val} tokens total. "
+                f"Write approximately {reply_target} tokens total (hard cap {max_tokens_actual} new tokens). "
                 f"Do not exceed the action count above under any circumstances. "
                 f"Do NOT write the token count, word count, action number, or any parenthetical summary, checklist, or compliance note at the end — "
                 f"the scene ends with the last sentence of prose. Nothing after it. No brackets. No notes. No confirmation.]"
             )
             print(
-                f"[LazyPrompt] Video token budget: ~{token_val} soft target / {max_tokens_actual} max new tokens "
+                f"[LazyPrompt] Video tokens: ~{reply_target} pacing target / {max_tokens_actual} max new tokens "
                 f"(actions: {action_count}, length: {real_seconds:g}s, frames≈{frame_count}, fps: {fps_f:g})"
             )
         else:
             real_seconds = 0.0
             frame_count = 0
             action_count = 1
-            token_val = 768 + _TOKEN_BUDGET_PAD
-            max_tokens_actual = _MAX_OUTPUT_TOKENS
-            min_tokens = min(128 + _TOKEN_BUDGET_PAD, _MAX_OUTPUT_TOKENS - 200)
+            min_tokens = max(
+                16,
+                min(int(reply_target * 0.75), max_tokens_actual - 1),
+            )
             length_instruction = (
                 "\n[FORMAT: Follow the system prompt exactly for the image target. "
-                "No preamble, no meta commentary, no token counts.]\n"
+                f"Aim for roughly {reply_target} tokens of descriptive output (hard cap {max_tokens_actual} new tokens). "
+                "No preamble, no meta commentary in your reply.]\n"
             )
-            print(f"[LazyPrompt] Image target token budget: {max_tokens_actual} max")
+            print(
+                f"[LazyPrompt] Image tokens: ~{reply_target} pacing target / {max_tokens_actual} max new tokens"
+            )
 
         # --- Seed ---
         if seed != -1:
@@ -1026,21 +1014,27 @@ IMPORTANT: Output ONLY the expanded prompt. Do NOT include preamble, commentary,
         else:
             effective_input = user_input.strip()
 
-        has_visual_context = bool(scene_context and scene_context.strip()) or (
-            use_lm_studio and image is not None
-        )
-        aug = build_prompt_augmentation(
-            target_model=target_model,
-            environment=environment,
-            frame_count=frame_count,
-            fps=fps_f,
-            character=(character or "").strip(),
-            seed=env_seed,
-            screenplay_mode=screen_use,
-            has_scene_context=has_visual_context,
-        )
-        if aug.strip():
-            effective_input = effective_input.rstrip() + "\n\n---\n" + aug
+        if minimal_llm:
+            print(
+                "[LazyPrompt] Minimal mode (None target + system override): "
+                "system prompt from override only; user message is scene + idea only (no augmentation tail)."
+            )
+        else:
+            has_visual_context = bool(scene_context and scene_context.strip()) or (
+                use_lm_studio and image is not None
+            )
+            aug = build_prompt_augmentation(
+                target_model=target_model,
+                environment=environment,
+                frame_count=frame_count,
+                fps=fps_f,
+                character=(character or "").strip(),
+                seed=env_seed,
+                screenplay_mode=screen_use,
+                has_scene_context=has_visual_context,
+            )
+            if aug.strip():
+                effective_input = effective_input.rstrip() + "\n\n---\n" + aug
 
         # --- LoRA trigger injection ---
         # If the user provided trigger words, inject them as a hard instruction
@@ -1054,20 +1048,23 @@ IMPORTANT: Output ONLY the expanded prompt. Do NOT include preamble, commentary,
         else:
             lora_instruction = ""
 
-        # --- System prompt: override or auto template for target_model ---
+        # --- System prompt: override or JSON template for target_model ---
         effective_system_prompt = (system_prompt.strip() if system_prompt else "") or get_system_prompt(
             target_model, screen_use
         )
 
-        user_tail = (
-            sequence_instruction
-            + no_person_instruction
-            + multi_instruction
-            + dialogue_instruction
-            + explicit_instruction
-            + lora_instruction
-            + length_instruction
-        )
+        if minimal_llm:
+            user_tail = ""
+        else:
+            user_tail = (
+                sequence_instruction
+                + no_person_instruction
+                + multi_instruction
+                + dialogue_instruction
+                + explicit_instruction
+                + lora_instruction
+                + length_instruction
+            )
         user_text = effective_input + user_tail
         if use_lm_studio and image is not None:
             try:

@@ -1,6 +1,10 @@
 # Documentation index
 
-Detailed workflow and file-format guides live under **`docs/nodes/`**.
+Detailed workflow and file-format guides live under **`docs/nodes/`**. End-to-end workflow narratives (how pieces connect) live under **`docs/workflows/`**.
+
+| Doc | Topic |
+|-----|--------|
+| [workflows/lazy-subject-scene-automation-workflow.md](workflows/lazy-subject-scene-automation-workflow.md) | Lazy Subject + Scene Automation — operator flow, `run()` pipeline, module sections, API, extension |
 
 | Doc | Node / feature |
 |-----|------------------|
@@ -11,5 +15,6 @@ Detailed workflow and file-format guides live under **`docs/nodes/`**.
 | [nodes/optional-switch-lora.md](nodes/optional-switch-lora.md) | Optional Switch LoRA |
 | [nodes/lazy-prompt-saver.md](nodes/lazy-prompt-saver.md) | Lazy Prompt Saver |
 | [nodes/lazyprompt.md](nodes/lazyprompt.md) | LazyPrompt (Prompt Engineer, Vision Describe, Unload) |
+| [nodes/lazyprompt-prompt-enhancement.md](nodes/lazyprompt-prompt-enhancement.md) | LazyPrompt: enhancement pipeline and system prompt override |
 
 The repository [README.md](../README.md) has a short summary of each and links here.

@@ -2,6 +2,8 @@
 
 **ComfyUI node:** `LazySubjectSceneAutomation` · **Menu:** `vsaan212/automation`
 
+For an end-to-end workflow narrative (how the node, Python module, HTTP routes, and `lazy_subject_scene_live.js` fit together), see **[lazy-subject-scene-automation-workflow.md](../workflows/lazy-subject-scene-automation-workflow.md)**.
+
 Combines optional-switch LoRA behavior, subject/scenario file selection, and formatted prompt output for **dual high/low** Wan-style workflows (and similar two-branch model graphs).
 
 ## File locations (important)
