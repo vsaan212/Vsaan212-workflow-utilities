@@ -26,29 +26,6 @@ _LAZY_V2_STEM_TEMPLATE = (
 )
 
 
-# WebSocket event: server tells clients to refresh preset dropdown after save.
-LAZY_PRESET_WS_EVENT = "vsaan212.lazy_subject_scene.presets"
-
-# Default scenario-side tagged template (v2 slot names). Stored in preset JSON as `scenario_template`.
-DEFAULT_SCENARIO_TEMPLATE = """[LoraHighA][1.0][1.0]
-bypass
-[LoraLowA][1.0][1.0]
-bypass
-[LoraHighB][1.0][1.0]
-bypass
-[LoraLowB][1.0][1.0]
-bypass
-[LoraHighC][1.0][1.0]
-bypass
-[LoraLowC][1.0][1.0]
-bypass
-[KeywordA]
-[KeywordB]
-[KeywordC]
-[desciption]
-"""
-
-
 def _normalize_rel_no_ext(rel: str) -> str:
     return (rel or "").strip().replace("\\", "/").strip("/")
 
@@ -87,6 +64,93 @@ def _read_txt_under_root(root: str, rel_no_ext: str) -> Tuple[str, Optional[str]
             return f.read(), None
     except OSError as e:
         return "", str(e)
+
+
+def _write_txt_under_root(root: str, rel_no_ext: str, content: str) -> Optional[str]:
+    rel = _normalize_rel_no_ext(rel_no_ext)
+    if not rel or rel == "none":
+        return "no file selected"
+    if not _is_safe_rel_under_root(root, rel):
+        return "invalid path"
+    path = os.path.join(root, rel + ".txt")
+    os.makedirs(os.path.dirname(path) or root, exist_ok=True)
+    try:
+        text = content if content is not None else ""
+        with open(path, "w", encoding="utf-8", newline="\n") as f:
+            f.write(text)
+            if text and not text.endswith("\n"):
+                f.write("\n")
+    except OSError as e:
+        return str(e)
+    return None
+
+
+def _format_strength_value(value: float) -> str:
+    try:
+        n = float(value)
+    except (TypeError, ValueError):
+        return "1.0"
+    return f"{n:.4f}".rstrip("0").rstrip(".")
+
+
+def _read_tag_model_strength(content: str, tag: str) -> Optional[float]:
+    tag_key = _norm_tag(tag)
+    for line in content.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+        stripped = line.strip()
+        if not stripped.startswith("["):
+            continue
+        groups = re.findall(r"\[([^\]]*)\]", stripped)
+        if not groups or _norm_tag(groups[0]) != tag_key:
+            continue
+        if len(groups) > 1:
+            parsed = _parse_float(groups[1], None)
+            return parsed if parsed is not None else 1.0
+        return 1.0
+    return None
+
+
+def _write_tag_model_strength(content: str, tag: str, model_strength: float) -> str:
+    tag_key = _norm_tag(tag)
+    sm = _format_strength_value(model_strength)
+    lines = content.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    out: List[str] = []
+    replaced = False
+    for line in lines:
+        stripped = line.strip()
+        if not stripped.startswith("["):
+            out.append(line)
+            continue
+        groups = re.findall(r"\[([^\]]*)\]", stripped)
+        if not groups or _norm_tag(groups[0]) != tag_key:
+            out.append(line)
+            continue
+        clip = groups[2] if len(groups) > 2 else (groups[1] if len(groups) > 1 else "1.0")
+        out.append(f"[{groups[0]}][{sm}][{clip}]")
+        replaced = True
+    if not replaced:
+        out.extend([f"[{tag}][{sm}][1.0]", "bypass"])
+    return "\n".join(out)
+
+
+def _apply_scenario2_strength_overrides(
+    content: str, high_strength: float, low_strength: float
+) -> str:
+    text = content or ""
+    text = _write_tag_model_strength(text, "LoraHighA", high_strength)
+    text = _write_tag_model_strength(text, "LoraLowA", low_strength)
+    return text
+
+
+def _resolve_live_or_disk(
+    rel_no_ext: str,
+    live: Optional[str],
+    root: str,
+    use_live: bool = False,
+) -> Tuple[str, Optional[str]]:
+    """Use live editor when use_live is set; otherwise read from disk."""
+    if use_live and live is not None:
+        return str(live), None
+    return _read_txt_under_root(root, rel_no_ext)
 
 
 def _ensure_lazy_seed_txt_files() -> None:
@@ -433,10 +497,16 @@ def parse_scenario_text(content: str) -> Tuple[List[ApplySlot], List[ApplySlot],
     return high, low, desc, []
 
 
-def _merge_stacks(
-    subj: List[ApplySlot], scen: List[ApplySlot]
-) -> List[ApplySlot]:
-    return list(subj) + list(scen)
+def _merge_stacks(*parts: List[ApplySlot]) -> List[ApplySlot]:
+    out: List[ApplySlot] = []
+    for part in parts:
+        out.extend(part)
+    return out
+
+
+def _combine_scenario_descriptions(*descs: str) -> str:
+    parts = [(d or "").strip() for d in descs if (d or "").strip()]
+    return "\n\n".join(parts)
 
 
 def _resolve_lora_name(cmd: str) -> str:
@@ -460,8 +530,10 @@ def _apply_stack(model, clip, stack: List[ApplySlot]):
     return model, clip
 
 
-def _format_keywords(subject_kws: List[str], scenario_kws: List[str]) -> str:
-    parts = [k for k in subject_kws if k] + [k for k in scenario_kws if k]
+def _format_keywords(subject_kws: List[str], *scenario_kw_groups: List[str]) -> str:
+    parts: List[str] = [k for k in subject_kws if k]
+    for group in scenario_kw_groups:
+        parts.extend(k for k in group if k)
     if not parts:
         return ""
     return ", ".join(parts) + ", "
@@ -514,10 +586,8 @@ class LazySubjectSceneAutomation:
 
     subjects_relpaths: List[str] = []
     scenarios_relpaths: List[str] = []
-    presets_relpaths: List[str] = []
     subjects_root: str = ""
     scenarios_root: str = ""
-    presets_root: str = ""
 
     @classmethod
     def refresh_subjects_list(cls) -> None:
@@ -552,126 +622,63 @@ class LazySubjectSceneAutomation:
         cls.scenarios_relpaths = scenarios
 
     @classmethod
-    def refresh_presets_list(cls) -> None:
-        preset_dir = os.path.join(os.path.dirname(__file__), "Presets")
-        cls.presets_root = preset_dir
-        os.makedirs(preset_dir, exist_ok=True)
-        presets: List[str] = []
-        for root, _, files in os.walk(preset_dir):
-            for f in files:
-                if f.lower().endswith(".json"):
-                    full_path = os.path.join(root, f)
-                    rel_path = os.path.relpath(full_path, preset_dir).replace("\\", "/")
-                    presets.append(rel_path[:-5])
-        cls.presets_relpaths = presets
-
-    @classmethod
-    def api_read_pair(cls, subject: str, scenario: str) -> Dict[str, Any]:
+    def api_read_pair(
+        cls, subject: str, scenario: str, scenario_2: str = "none"
+    ) -> Dict[str, Any]:
         cls.refresh_subjects_list()
         cls.refresh_scenarios_list()
         subj_text, subj_err = _read_txt_under_root(cls.subjects_root, subject)
         scen_text, scen_err = _read_txt_under_root(cls.scenarios_root, scenario)
+        scen2_text, scen2_err = _read_txt_under_root(cls.scenarios_root, scenario_2)
         return {
             "subject_text": subj_text,
             "scenario_text": scen_text,
+            "scenario_2_text": scen2_text,
             "subject_error": subj_err,
             "scenario_error": scen_err,
-            "error": subj_err or scen_err,
+            "scenario_2_error": scen2_err,
+            "error": subj_err or scen_err or scen2_err,
         }
 
     @classmethod
-    def api_list_presets(cls) -> Dict[str, Any]:
-        cls.refresh_presets_list()
-        return {"presets": sorted(cls.presets_relpaths, key=lambda s: s.lower())}
+    def api_save_live_files(cls, body: Dict[str, Any]) -> Dict[str, Any]:
+        cls.refresh_subjects_list()
+        cls.refresh_scenarios_list()
+        saved: List[str] = []
+        errors: List[str] = []
 
-    @classmethod
-    def api_load_preset(cls, preset: str) -> Dict[str, Any]:
-        import json
+        def try_save(rel_key: str, text_key: str, root: str) -> None:
+            rel = _normalize_rel_no_ext(str(body.get(rel_key, "") or ""))
+            if not rel or rel == "none":
+                return
+            raw = body.get(text_key)
+            if raw is None or not str(raw).strip():
+                return
+            err = _write_txt_under_root(root, rel, str(raw))
+            if err:
+                errors.append(f"{rel_key}: {err}")
+            else:
+                saved.append(os.path.join(root, rel + ".txt"))
 
-        cls.refresh_presets_list()
-        rel = _normalize_rel_no_ext(preset)
-        if not rel or rel == "(none)":
-            return {"error": "no preset selected"}
-        if not _is_safe_rel_under_root(cls.presets_root, rel, ".json"):
-            return {"error": "invalid preset path"}
-        path = os.path.join(cls.presets_root, rel + ".json")
-        if not os.path.isfile(path):
-            return {"error": f"preset not found: {rel}.json"}
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-        except (OSError, json.JSONDecodeError) as e:
-            return {"error": str(e)}
-        if not isinstance(data, dict):
-            return {"error": "preset must be a JSON object"}
-        subj = str(data.get("subject", "") or "")
-        scen = str(data.get("scenario", "") or "")
-        pair = cls.api_read_pair(subj, scen)
-        out = {
-            "subject": subj,
-            "scenario": scen,
-            "prepend_text": str(data.get("prepend_text", "") or ""),
-            "post_text": str(data.get("post_text", "") or ""),
-            "pass_subject_to_main_prompt": bool(
-                data.get("pass_subject_to_main_prompt", True)
-            ),
-            "scenario_template": str(
-                data.get("scenario_template", "") or DEFAULT_SCENARIO_TEMPLATE
-            ),
-            "subject_text": pair["subject_text"],
-            "scenario_text": pair["scenario_text"],
-            "error": pair.get("error"),
-        }
-        return out
+        try_save("subject", "subject_text", cls.subjects_root)
+        try_save("scenario", "scenario_text", cls.scenarios_root)
+        try_save("scenario_2", "scenario_2_text", cls.scenarios_root)
 
-    @classmethod
-    def api_save_preset(cls, body: Dict[str, Any]) -> Dict[str, Any]:
-        import json
-
-        cls.refresh_presets_list()
-        name = _normalize_rel_no_ext(str(body.get("name", "") or ""))
-        if not name or name == "(none)":
-            return {"error": "missing or invalid preset name"}
-        if not _is_safe_rel_under_root(cls.presets_root, name, ".json"):
-            return {"error": "invalid preset name or path"}
-        path_abs = os.path.normpath(
-            os.path.join(os.path.abspath(cls.presets_root), name + ".json")
-        )
-        payload = {
-            "subject": str(body.get("subject", "") or ""),
-            "scenario": str(body.get("scenario", "") or ""),
-            "prepend_text": str(body.get("prepend_text", "") or ""),
-            "post_text": str(body.get("post_text", "") or ""),
-            "pass_subject_to_main_prompt": bool(
-                body.get("pass_subject_to_main_prompt", True)
-            ),
-            "scenario_template": str(
-                body.get("scenario_template", "") or DEFAULT_SCENARIO_TEMPLATE
-            ),
-        }
-        os.makedirs(os.path.dirname(path_abs), exist_ok=True)
-        try:
-            with open(path_abs, "w", encoding="utf-8", newline="\n") as f:
-                json.dump(payload, f, indent=2, ensure_ascii=False)
-                f.write("\n")
-        except OSError as e:
-            return {"error": str(e)}
-        root_abs = os.path.abspath(cls.presets_root)
+        if not saved and not errors:
+            return {"ok": False, "error": "nothing to save (empty panes or none selected)"}
         return {
-            "ok": True,
-            "path": os.path.relpath(path_abs, root_abs).replace("\\", "/"),
+            "ok": len(errors) == 0,
+            "saved": saved,
+            "errors": errors,
+            "error": "; ".join(errors) if errors else None,
         }
 
     @classmethod
     def INPUT_TYPES(cls) -> Dict[str, Any]:
         cls.refresh_subjects_list()
         cls.refresh_scenarios_list()
-        cls.refresh_presets_list()
         subj_choices = sorted(cls.subjects_relpaths, key=lambda s: s.lower())
         scen_choices = sorted(cls.scenarios_relpaths, key=lambda s: s.lower())
-        preset_choices = ["(none)"] + sorted(
-            cls.presets_relpaths, key=lambda s: s.lower()
-        )
         if not subj_choices:
             subj_choices = ["none"]
         if not scen_choices:
@@ -684,11 +691,41 @@ class LazySubjectSceneAutomation:
                 "clip_low": ("CLIP",),
                 "subject": (subj_choices,),
                 "scenario": (scen_choices,),
-                "preset_file": (
-                    preset_choices,
+                "scenario_2": (
+                    scen_choices,
                     {
-                        "default": "(none)",
-                        "tooltip": "JSON preset under lazy_subject_scene_automation/Presets/. Live UI loads/saves via extension.",
+                        "default": "none",
+                        "tooltip": (
+                            "Second scenario .txt (same format as scenario). "
+                            "Adds up to three more LoRA slots (A/B/C) after scenario 1 on each branch. "
+                            "Use none to disable."
+                        ),
+                    },
+                ),
+                "scenario_2_high_strength": (
+                    "FLOAT",
+                    {
+                        "default": 1.0,
+                        "min": 0.0,
+                        "max": 10.0,
+                        "step": 0.01,
+                        "tooltip": (
+                            "Overrides [LoraHighA] model strength in scenario 2 live text "
+                            "(clip strength unchanged)."
+                        ),
+                    },
+                ),
+                "scenario_2_low_strength": (
+                    "FLOAT",
+                    {
+                        "default": 1.0,
+                        "min": 0.0,
+                        "max": 10.0,
+                        "step": 0.01,
+                        "tooltip": (
+                            "Overrides [LoraLowA] model strength in scenario 2 live text "
+                            "(clip strength unchanged)."
+                        ),
                     },
                 ),
                 "pass_subject_to_main_prompt": (
@@ -719,6 +756,54 @@ class LazySubjectSceneAutomation:
                         "tooltip": "Optional: wired post text after subject block (replaces former on-node multiline).",
                     },
                 ),
+                "subject_live": (
+                    "STRING",
+                    {
+                        "default": "",
+                        "hidden": True,
+                        "tooltip": "Synced by live editor extension (not shown on node).",
+                    },
+                ),
+                "scenario_live": (
+                    "STRING",
+                    {
+                        "default": "",
+                        "hidden": True,
+                        "tooltip": "Synced by live editor extension (not shown on node).",
+                    },
+                ),
+                "scenario_2_live": (
+                    "STRING",
+                    {
+                        "default": "",
+                        "hidden": True,
+                        "tooltip": "Synced by live editor extension (not shown on node).",
+                    },
+                ),
+                "subject_use_live": (
+                    "BOOLEAN",
+                    {
+                        "default": False,
+                        "hidden": True,
+                        "tooltip": "When true, queue uses subject_live instead of disk.",
+                    },
+                ),
+                "scenario_use_live": (
+                    "BOOLEAN",
+                    {
+                        "default": False,
+                        "hidden": True,
+                        "tooltip": "When true, queue uses scenario_live.",
+                    },
+                ),
+                "scenario_2_use_live": (
+                    "BOOLEAN",
+                    {
+                        "default": False,
+                        "hidden": True,
+                        "tooltip": "When true, queue uses scenario_2_live.",
+                    },
+                ),
             },
         }
 
@@ -743,50 +828,65 @@ class LazySubjectSceneAutomation:
         clip_low,
         subject: str,
         scenario: str,
-        preset_file: str,
+        scenario_2: str = "none",
+        scenario_2_high_strength: float = 1.0,
+        scenario_2_low_strength: float = 1.0,
         pass_subject_to_main_prompt: bool = True,
         post_text: Optional[str] = None,
         prepend_text: Optional[str] = None,
+        subject_live: Optional[str] = None,
+        scenario_live: Optional[str] = None,
+        scenario_2_live: Optional[str] = None,
+        subject_use_live: bool = False,
+        scenario_use_live: bool = False,
+        scenario_2_use_live: bool = False,
     ):
-        _ = preset_file  # UI / preset system; execution uses subject + scenario widgets only
+        self.refresh_subjects_list()
+        self.refresh_scenarios_list()
+
         pre = (prepend_text if prepend_text is not None else "") or ""
         post = (post_text if post_text is not None else "") or ""
 
         rel_sub = (subject or "").strip().replace("\\", "/").strip("/")
         rel_scen = (scenario or "").strip().replace("\\", "/").strip("/")
+        rel_scen2 = (scenario_2 or "").strip().replace("\\", "/").strip("/")
 
         preview_err: List[str] = []
-        subj_raw = ""
-        scen_raw = ""
-
-        if rel_sub and rel_sub != "none":
-            p = os.path.join(self.subjects_root, f"{rel_sub}.txt")
-            try:
-                with open(p, "r", encoding="utf-8") as f:
-                    subj_raw = f.read()
-            except Exception as e:
-                preview_err.append(f"subject file: {e}")
-        if rel_scen and rel_scen != "none":
-            p = os.path.join(self.scenarios_root, f"{rel_scen}.txt")
-            try:
-                with open(p, "r", encoding="utf-8") as f:
-                    scen_raw = f.read()
-            except Exception as e:
-                preview_err.append(f"scenario file: {e}")
+        subj_raw, subj_err = _resolve_live_or_disk(
+            rel_sub, subject_live, self.subjects_root, subject_use_live
+        )
+        scen_raw, scen_err = _resolve_live_or_disk(
+            rel_scen, scenario_live, self.scenarios_root, scenario_use_live
+        )
+        scen2_raw, scen2_err = _resolve_live_or_disk(
+            rel_scen2, scenario_2_live, self.scenarios_root, scenario_2_use_live
+        )
+        if rel_scen2 and rel_scen2 != "none" and scen2_raw:
+            scen2_raw = _apply_scenario2_strength_overrides(
+                scen2_raw, scenario_2_high_strength, scenario_2_low_strength
+            )
+        if subj_err:
+            preview_err.append(f"subject file: {subj_err}")
+        if scen_err:
+            preview_err.append(f"scenario file: {scen_err}")
+        if scen2_err:
+            preview_err.append(f"scenario 2 file: {scen2_err}")
 
         sh, sl, sdesc, skw = parse_subject_text(subj_raw)
         ch, cl, cdesc, ckw = parse_scenario_text(scen_raw)
+        ch2, cl2, cdesc2, ckw2 = parse_scenario_text(scen2_raw)
 
-        hi = _merge_stacks(sh, ch)
-        lo = _merge_stacks(sl, cl)
+        hi = _merge_stacks(sh, ch, ch2)
+        lo = _merge_stacks(sl, cl, cl2)
 
         model_h, clip_h = _apply_stack(model_high, clip_high, hi)
         model_l, clip_l = _apply_stack(model_low, clip_low, lo)
 
         subject_description = (sdesc or "").strip()
         subj_for_main = sdesc if pass_subject_to_main_prompt else ""
-        prompt = _build_prompt(pre, post, subj_for_main, cdesc)
-        keywords = _format_keywords(skw, ckw)
+        scen_desc = _combine_scenario_descriptions(cdesc, cdesc2)
+        prompt = _build_prompt(pre, post, subj_for_main, scen_desc)
+        keywords = _format_keywords(skw, ckw, ckw2)
 
         if preview_err:
             err_hdr = "[Lazy automation load error]\n" + "\n".join(preview_err) + "\n"

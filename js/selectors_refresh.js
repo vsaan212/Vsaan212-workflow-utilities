@@ -13,18 +13,7 @@ const SELECTORS = {
         endpoints: [
             { endpoint: "/vsaan212/lazy-subject-scene/subjects", widgetName: "subject" },
             { endpoint: "/vsaan212/lazy-subject-scene/scenarios", widgetName: "scenario" },
-            {
-                endpoint: "/vsaan212/lazy-subject-scene/presets",
-                widgetName: "preset_file",
-                mapValues: (data) => {
-                    const names = Array.isArray(data?.presets)
-                        ? data.presets
-                        : Array.isArray(data)
-                          ? data
-                          : [];
-                    return ["(none)", ...names];
-                },
-            },
+            { endpoint: "/vsaan212/lazy-subject-scene/scenarios", widgetName: "scenario_2" },
         ],
     },
 };

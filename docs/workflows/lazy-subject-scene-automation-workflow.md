@@ -6,7 +6,7 @@ This document describes **how to use** the Lazy Subject + Scene Automation featu
 
 ## What this feature does (one sentence)
 
-You pick **subject** and **scenario** text files that declare LoRA stacks (with bypass), descriptions, and optional keywords; the node **merges** subject + scenario stacks on each of two branches (**high** / **low**), **applies** them to paired MODEL + CLIP, and outputs a **composed prompt** plus **keywords**—without maintaining separate LoRA chains in the graph for every combination.
+You pick **subject**, **scenario**, and optional **scenario_2** text files that declare LoRA stacks (with bypass), descriptions, and optional keywords; the node **merges** subject + both scenario stacks on each of two branches (**high** / **low**), **applies** them to paired MODEL + CLIP, and outputs a **composed prompt** plus **keywords**—without maintaining separate LoRA chains in the graph for every combination. The live extension lets you **edit pane text on queue**, **save to disk**, and tune **scenario 2** `[LoraHighA]` / `[LoraLowA]` model strength with sliders.
 
 ---
 
@@ -27,9 +27,10 @@ Dropdowns are built when the node is created or when the server refreshes lists 
 
 1. Bring **two** model branches (typical Wan-style **high-noise** and **low-noise**) with matching **CLIP** on each branch.
 2. Connect **`model_high`** / **`clip_high`** and **`model_low`** / **`clip_low`** into the node.
-3. Choose **`subject`** and **`scenario`** from the dropdowns (values are relative paths **without** `.txt`).
-4. Optionally wire **`prepend_text`** and **`post_text`** as STRING inputs (there are no multiline boxes on the node itself).
-5. Toggle **`pass_subject_to_main_prompt`** if you want the main **`prompt`** to omit the subject file’s description while still exposing it on **`subject_description`**.
+3. Choose **`subject`**, **`scenario`**, and optionally **`scenario_2`** from the dropdowns (values are relative paths **without** `.txt`).
+4. Optionally wire **`prepend_text`** and **`post_text`** as STRING inputs.
+5. Edit the **live** panes as needed; **queue uses pane text**. Use **Save edits** to persist to `.txt`. Adjust **scenario 2** strength sliders when a second scenario is selected.
+6. Toggle **`pass_subject_to_main_prompt`** if you want the main **`prompt`** to omit the subject file’s description while still exposing it on **`subject_description`**.
 
 ### 4. Use outputs downstream
 
@@ -41,17 +42,15 @@ Dropdowns are built when the node is created or when the server refreshes lists 
 | `keywords` | Trigger-style tags from subject then scenario `KeywordA`–`KeywordC` blocks, comma-separated with a trailing comma when non-empty. |
 | `subject_description` | Raw subject-side description text only (no prepend/post); useful when `pass_subject_to_main_prompt` is off but you still need the subject text elsewhere. |
 
-### 5. Live UI and presets (extension)
+### 5. Live file preview (extension)
 
 When the pack loads **`js/lazy_subject_scene_live.js`**, each **Lazy-subject-and-scene-automation** node shows:
 
-- **Subject file (live)** — read-only mirror of the selected subject `.txt` (via HTTP, no queue run).
-- **Scenario file (live)** — same for scenario.
-- **`scenario_template`** — editable text **stored only inside preset JSON** when you save; graph execution still reads the scenario file from disk for the **`scenario`** dropdown.
+- **Subject / scenario / scenario 2 (live)** — editable buffers; **queue uses this text** after you edit a pane.
+- **Scenario 2 high/low strength** — float sliders between scenario 1 and scenario 2 panes; override `[LoraHighA]` / `[LoraLowA]` model strength in scenario 2 live text.
+- **Save edits** — writes non-empty panes to the currently selected `.txt` files (one button, skips empty/`none` slots).
 
-**Load preset:** change **`preset_file`**; the extension POSTs **`load_preset`** and updates dropdowns, live panes, boolean, and template text from the JSON.
-
-**Save preset:** fills `prepend_text` / `post_text` in JSON as empty strings from the current extension (those fields are for API/preset portability; wire them in the graph for real prepend/post during execution).
+Changing **`subject`**, **`scenario`**, or **`scenario_2`** reloads from disk via **`read_pair`** (unless the workflow already had buffered live text).
 
 ---
 
@@ -73,22 +72,20 @@ flowchart TD
 
 Optional **`prepend_text`**, **`post_text`**, and **`pass_subject_to_main_prompt`** feed **`_build_prompt`** only (they do not change LoRA stacks).
 
-1. **Resolve paths** — `subject` / `scenario` relative paths; `none` or empty skips file read for that side.
+1. **Resolve paths** — `subject`, `scenario`, and `scenario_2` relative paths; `none` or empty skips file read for that side.
 2. **Read UTF-8 text** — failures append to `preview_err` and are prefixed onto `prompt` and `subject_description` so you see load errors in the graph.
-3. **Parse** — `parse_subject_text` and `parse_scenario_text` return `(high_stack, low_stack, description, keyword_list)` per side. Format is **v2 tagged** if any non-empty line starts with `[`; otherwise **v1** `#`-section legacy rules apply (different high/low mapping for scenario vs subject in v1).
-4. **Merge stacks** — `_merge_stacks(subject_slots, scenario_slots)` concatenates: **all subject LoRAs first**, then **all scenario LoRAs**, on each branch.
+3. **Parse** — `parse_subject_text` and `parse_scenario_text` (twice when `scenario_2` is set) return `(high_stack, low_stack, description, keyword_list)` per file. Format is **v2 tagged** if any non-empty line starts with `[`; otherwise **v1** `#`-section legacy rules apply (different high/low mapping for scenario vs subject in v1).
+4. **Merge stacks** — `_merge_stacks` concatenates on each branch: **subject LoRAs**, then **scenario 1 LoRAs**, then **scenario 2 LoRAs** (up to six scenario slots when both scenario files use A/B/C).
 5. **Apply** — `_apply_stack` walks the merged list with ComfyUI’s **`LoraLoader`**, resolving paths and registering custom LoRA directories when the path exists on disk.
 6. **Compose text** — `_build_prompt` interleaves prepend, optional subject description in the main prompt (controlled by the boolean), post text, and scenario description with intentional newlines. `_format_keywords` merges keyword lists.
-
-**Note:** The **`preset_file`** widget is ignored during **`run`**; execution always uses the current **`subject`** / **`scenario`** widget values (and optional STRING inputs). Presets are a **UI snapshot** mechanism.
 
 ---
 
 ## List refresh
 
-Lists of subjects, scenarios, and presets are refreshed when:
+Lists of subjects and scenarios are refreshed when:
 
-- **`INPUT_TYPES`** runs (node definition / refresh in ComfyUI), which calls `refresh_subjects_list`, `refresh_scenarios_list`, and `refresh_presets_list`.
+- **`INPUT_TYPES`** runs (node definition / refresh in ComfyUI), which calls `refresh_subjects_list` and `refresh_scenarios_list`.
 - HTTP **`GET`** routes under `/vsaan212/lazy-subject-scene/` call the same refresh helpers (used by `js/selectors_refresh.js` and the live extension).
 
 **Seeding:** `_ensure_lazy_seed_txt_files` runs during subject/scenario refresh. If `none.txt` or `Bypass and format example.txt` is missing in either folder, it is **created** from the v2 minimal bypass template. Existing files are **never** overwritten.
@@ -102,7 +99,7 @@ Read top-to-bottom, the file groups into these **logical sections**:
 | Section (approx. lines) | Responsibility |
 |-------------------------|----------------|
 | **Module docstring + imports** (1–16) | Describes Wan-style dual-stack purpose; imports `LoraLoader`, `model_management`. |
-| **Types + constants** (17–50) | `ApplySlot` tuple type; `_LAZY_V2_STEM_TEMPLATE` for seed files; `LAZY_PRESET_WS_EVENT`; `DEFAULT_SCENARIO_TEMPLATE` for presets and default scenario editor text. |
+| **Types + constants** (17–27) | `ApplySlot` tuple type; `_LAZY_V2_STEM_TEMPLATE` for seed files. |
 | **Path safety + I/O helpers** (52–106) | `_normalize_rel_no_ext`, `_is_safe_rel_under_root` (blocks `..`), `_read_txt_under_root`, `_ensure_lazy_seed_txt_files`. |
 | **Tag normalization + bypass** (109–127) | `_norm_tag`, `_bypass_path`, `_parse_float` for tagged strengths. |
 | **v1 legacy splitting** (130–133) | `_split_v1_sections` on `#`-only separator lines. |
@@ -123,11 +120,8 @@ Routes are registered in the pack’s **`__init__.py`** when `LazySubjectSceneAu
 |--------|------|------|
 | `GET` | `/vsaan212/lazy-subject-scene/subjects` | Refresh + return sorted subject rel paths (no `.txt`). |
 | `GET` | `/vsaan212/lazy-subject-scene/scenarios` | Same for scenarios. |
-| `GET` | `/vsaan212/lazy-subject-scene/presets` | JSON `{"presets": [...]}` for JSON files under `Presets/`. |
-| `GET` | `/vsaan212/lazy-subject-scene/default_scenario_template` | Returns `DEFAULT_SCENARIO_TEMPLATE` for empty template UI. |
-| `POST` | `/vsaan212/lazy-subject-scene/read_pair` | Body `subject` / `scenario` → file texts + errors (path-safe). |
-| `POST` | `/vsaan212/lazy-subject-scene/load_preset` | Body `preset` (or legacy `filename`) → preset fields + `read_pair` texts. |
-| `POST` | `/vsaan212/lazy-subject-scene/save_preset` | Writes `Presets/{name}.json`; on success refreshes preset list and **`send_sync(LAZY_PRESET_WS_EVENT, {presets})`** so all nodes update **`preset_file`** options. |
+| `POST` | `/vsaan212/lazy-subject-scene/read_pair` | Body `subject`, `scenario`, optional `scenario_2` → file texts + errors (path-safe). |
+| `POST` | `/vsaan212/lazy-subject-scene/save_live_files` | Writes non-empty `*_text` fields to the matching selected paths. |
 
 ---
 
@@ -135,10 +129,10 @@ Routes are registered in the pack’s **`__init__.py`** when `LazySubjectSceneAu
 
 | Piece | Behavior |
 |-------|----------|
-| **`ensurePresetWsListener`** | Subscribes once to `vsaan212.lazy_subject_scene.presets` and patches every node’s `preset_file` widget values. |
-| **`fetchReadPair`** | POST `read_pair` when subject/scenario changes; fills read-only textareas; shows errors inline. |
-| **`buildLiveDom`** | Builds the three text areas (subject live, scenario live, editable template). |
-| **`onNodeCreated` hook** | Adds DOM widget, chains callbacks on subject/scenario/preset widgets, wires **Save preset** (note: prepend/post sent as empty strings), seeds template from `default_scenario_template` if blank, initial `fetchReadPair`. |
+| **`fetchReadPair`** | POST `read_pair` when subject/scenario/scenario_2 changes; fills read-only textareas; shows errors inline. |
+| **`buildLiveDom`** | Three editable text areas, scenario 2 strength slider host, status lines, **Save edits** button. |
+| **`syncLiveToWidgets` / queue hook** | Copies panes into hidden live widgets before queue; applies slider overrides to scenario 2 text. |
+| **`onNodeCreated` hook** | Relocates strength widgets into live DOM, hides sync widgets, chains dropdown reloads, restores buffered workflow text or `fetchReadPair`. |
 
 ---
 
@@ -147,9 +141,10 @@ Routes are registered in the pack’s **`__init__.py`** when `LazySubjectSceneAu
 For both **high** and **low** stacks (separate lists, same tag *names* interpreted per file type):
 
 1. Subject slot A → B → C (skipping bypass / missing optional pairs per `_append_optional_slot` rules).
-2. Scenario slot A → B → C.
+2. Scenario 1 slot A → B → C.
+3. Scenario 2 slot A → B → C when `scenario_2` is not `none`.
 
-Cross-file order is always **subject first**, then **scenario**.
+Cross-file order is always **subject first**, then **scenario 1**, then **scenario 2**.
 
 ---
 

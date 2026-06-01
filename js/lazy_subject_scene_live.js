@@ -1,11 +1,22 @@
 /**
- * Lazy Subject + Scene Automation — live file previews, preset load/save, WebSocket preset list refresh.
+ * Lazy Subject + Scene Automation — editable live buffers (queue uses live text),
+ * save to disk, scenario 2 strength sliders override [LoraHighA]/[LoraLowA] in live text.
  */
 import { app } from "../../scripts/app.js";
-import { api } from "../../scripts/api.js";
 
 const LAZY_API = "/vsaan212/lazy-subject-scene";
-const WS_EVENT = "vsaan212.lazy_subject_scene.presets";
+const LIVE_WIDGETS = ["subject_live", "scenario_live", "scenario_2_live"];
+const USE_LIVE_WIDGETS = [
+    "subject_use_live",
+    "scenario_use_live",
+    "scenario_2_use_live",
+];
+const SCENARIO2_SLIDER_WIDGETS = ["scenario_2_high_strength", "scenario_2_low_strength"];
+const HIDDEN_WIDGETS = [...LIVE_WIDGETS, ...USE_LIVE_WIDGETS];
+const NODE_MIN_WIDTH = 420;
+const NODE_MIN_HEIGHT = 560;
+
+let queueHooked = false;
 
 function graphNodes(graph) {
     if (!graph) return [];
@@ -14,32 +25,250 @@ function graphNodes(graph) {
     return [];
 }
 
-let wsHooked = false;
+function formatStrengthValue(value) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return "1.0";
+    return String(Math.round(n * 10000) / 10000)
+        .replace(/(\.\d*?)0+$/, "$1")
+        .replace(/\.$/, "");
+}
 
-function ensurePresetWsListener() {
-    if (wsHooked) return;
-    wsHooked = true;
-    api.addEventListener(WS_EVENT, (event) => {
-        const presets = event.detail?.presets || [];
-        const values = ["(none)", ...presets];
+function normTag(tag) {
+    return String(tag || "")
+        .toLowerCase()
+        .replace(/[^a-z0-9]/g, "");
+}
+
+function readTagModelStrength(content, tag) {
+    const tagKey = normTag(tag);
+    for (const line of String(content || "").replace(/\r\n/g, "\n").split("\n")) {
+        const stripped = line.trim();
+        if (!stripped.startsWith("[")) continue;
+        const groups = [...stripped.matchAll(/\[([^\]]*)\]/g)].map((m) => m[1]);
+        if (!groups.length || normTag(groups[0]) !== tagKey) continue;
+        if (groups.length > 1) {
+            const n = parseFloat(groups[1]);
+            return Number.isFinite(n) ? n : 1.0;
+        }
+        return 1.0;
+    }
+    return null;
+}
+
+function writeTagModelStrength(content, tag, modelStrength) {
+    const tagKey = normTag(tag);
+    const sm = formatStrengthValue(modelStrength);
+    const lines = String(content || "").replace(/\r\n/g, "\n").split("\n");
+    const out = [];
+    let replaced = false;
+    for (const line of lines) {
+        const stripped = line.trim();
+        if (!stripped.startsWith("[")) {
+            out.push(line);
+            continue;
+        }
+        const groups = [...stripped.matchAll(/\[([^\]]*)\]/g)].map((m) => m[1]);
+        if (!groups.length || normTag(groups[0]) !== tagKey) {
+            out.push(line);
+            continue;
+        }
+        const clip = groups.length > 2 ? groups[2] : "1.0";
+        out.push(`[${groups[0]}][${sm}][${clip}]`);
+        replaced = true;
+    }
+    if (!replaced) {
+        out.push(`[${tag}][${sm}][1.0]`, "bypass");
+    }
+    return out.join("\n");
+}
+
+function readScenario2Strengths(text) {
+    return {
+        high: readTagModelStrength(text, "LoraHighA") ?? 1.0,
+        low: readTagModelStrength(text, "LoraLowA") ?? 1.0,
+    };
+}
+
+/** Hide sync widgets without affecting node width (never use computeSize [0,0]). */
+function hideLiveWidgets(node) {
+    for (const name of HIDDEN_WIDGETS) {
+        const w = node.widgets?.find((x) => x.name === name);
+        if (!w) continue;
+        if (w.hidden !== undefined) w.hidden = true;
+    }
+}
+
+function relocateWidgetRows(node, names, container) {
+    if (!container) return;
+    for (const name of names) {
+        const w = node.widgets?.find((x) => x.name === name);
+        if (!w) continue;
+        const row = w.element?.closest?.(".comfy-widget") || w.element?.parentElement;
+        if (row) container.appendChild(row);
+    }
+}
+
+function setScenario2SlidersEnabled(node, enabled) {
+    for (const name of SCENARIO2_SLIDER_WIDGETS) {
+        const w = node.widgets?.find((x) => x.name === name);
+        if (!w) continue;
+        if (w.disabled !== undefined) w.disabled = !enabled;
+        const row = w.element?.closest?.(".comfy-widget");
+        if (row) row.style.opacity = enabled ? "" : "0.45";
+        if (row) row.style.pointerEvents = enabled ? "" : "none";
+    }
+}
+
+function ensureNodeMinSize(node) {
+    const w = Math.max(node.size?.[0] ?? 0, NODE_MIN_WIDTH);
+    const h = Math.max(node.size?.[1] ?? 0, NODE_MIN_HEIGHT);
+    if (node.size?.[0] !== w || node.size?.[1] !== h) {
+        node.setSize?.([w, h]);
+    }
+}
+
+function syncLiveToProperties(node) {
+    node.properties = node.properties || {};
+    node.properties.vsaan212_lssa = {
+        subject_live: node.__lssSubjectTa?.value ?? "",
+        scenario_live: node.__lssScenarioTa?.value ?? "",
+        scenario_2_live: node.__lssScenario2Ta?.value ?? "",
+        subject_use_live: !!node.widgets?.find((x) => x.name === "subject_use_live")?.value,
+        scenario_use_live: !!node.widgets?.find((x) => x.name === "scenario_use_live")?.value,
+        scenario_2_use_live: !!node.widgets?.find((x) => x.name === "scenario_2_use_live")?.value,
+        scenario_2_high_strength:
+            node.widgets?.find((x) => x.name === "scenario_2_high_strength")?.value ?? 1.0,
+        scenario_2_low_strength:
+            node.widgets?.find((x) => x.name === "scenario_2_low_strength")?.value ?? 1.0,
+    };
+}
+
+function setWidgetValue(node, name, value) {
+    const w = node.widgets?.find((x) => x.name === name);
+    if (!w) return;
+    w.value = value;
+    if (typeof w.callback === "function") {
+        w.callback(value, app.canvas, node, {}, w);
+    }
+}
+
+function markPaneLive(node, which) {
+    const flag =
+        which === "subject"
+            ? "subject_use_live"
+            : which === "scenario"
+              ? "scenario_use_live"
+              : "scenario_2_use_live";
+    setWidgetValue(node, flag, true);
+}
+
+function clearLiveFlags(node) {
+    for (const name of USE_LIVE_WIDGETS) {
+        setWidgetValue(node, name, false);
+    }
+}
+
+function syncLiveToWidgets(node) {
+    if (node.__lssSubjectTa) {
+        setWidgetValue(node, "subject_live", node.__lssSubjectTa.value ?? "");
+    }
+    if (node.__lssScenarioTa) {
+        setWidgetValue(node, "scenario_live", node.__lssScenarioTa.value ?? "");
+    }
+    if (node.__lssScenario2Ta) {
+        setWidgetValue(node, "scenario_2_live", node.__lssScenario2Ta.value ?? "");
+    }
+    syncLiveToProperties(node);
+    node.setDirtyCanvas?.(true, true);
+}
+
+function syncAllLazyLiveNodes() {
+    for (const node of graphNodes(app.graph)) {
+        if (node.comfyClass !== "LazySubjectSceneAutomation") continue;
+        syncLiveToWidgets(node);
+    }
+}
+
+function ensureQueueHook() {
+    if (queueHooked) return;
+    queueHooked = true;
+    const orig = app.queuePrompt;
+    app.queuePrompt = function (...args) {
         for (const node of graphNodes(app.graph)) {
             if (node.comfyClass !== "LazySubjectSceneAutomation") continue;
-            const w = node.widgets?.find((x) => x.name === "preset_file");
-            if (!w) continue;
-            const cur = w.value;
-            w.options.values = values;
-            w.value = values.includes(cur) ? cur : "(none)";
-            node.setDirtyCanvas(true, true);
+            applyScenario2StrengthFromSliders(node, false);
         }
-    });
+        syncAllLazyLiveNodes();
+        return orig.apply(this, args);
+    };
+}
+
+function updateScenario2SlidersFromText(node) {
+    const ta = node.__lssScenario2Ta;
+    if (!ta) return;
+    const { high, low } = readScenario2Strengths(ta.value);
+    node.__lssUpdatingSliders = true;
+    setWidgetValue(node, "scenario_2_high_strength", high);
+    setWidgetValue(node, "scenario_2_low_strength", low);
+    node.__lssUpdatingSliders = false;
+}
+
+function applyScenario2StrengthFromSliders(node, markLive = true) {
+    if (node.__lssUpdatingSliders) return;
+    const scen2 = node.widgets?.find((w) => w.name === "scenario_2");
+    if (!scen2?.value || scen2.value === "none") return;
+
+    const highW = node.widgets?.find((w) => w.name === "scenario_2_high_strength");
+    const lowW = node.widgets?.find((w) => w.name === "scenario_2_low_strength");
+    const ta = node.__lssScenario2Ta;
+    if (!ta) return;
+
+    let text = ta.value ?? "";
+    text = writeTagModelStrength(text, "LoraHighA", highW?.value ?? 1.0);
+    text = writeTagModelStrength(text, "LoraLowA", lowW?.value ?? 1.0);
+    ta.value = text;
+    if (markLive) {
+        markPaneLive(node, "scenario_2");
+        syncLiveToWidgets(node);
+    }
+}
+
+function setupScenario2Sliders(node) {
+    for (const name of SCENARIO2_SLIDER_WIDGETS) {
+        const w = node.widgets?.find((x) => x.name === name);
+        if (!w) continue;
+        const orig = w.callback;
+        w.callback = function (v) {
+            if (orig) orig.apply(this, arguments);
+            if (!node.__lssUpdatingSliders) {
+                applyScenario2StrengthFromSliders(node);
+            }
+        };
+    }
+}
+
+function setPane(ta, statusEl, text, error, canSaveKey) {
+    const node = ta.__lssNode;
+    ta.value = text ?? "";
+    if (error) {
+        statusEl.textContent = String(error);
+        statusEl.style.display = "block";
+        node[canSaveKey] = false;
+    } else {
+        statusEl.textContent = "";
+        statusEl.style.display = "none";
+        node[canSaveKey] = true;
+    }
 }
 
 async function fetchReadPair(node) {
     const subj = node.widgets?.find((w) => w.name === "subject");
     const scen = node.widgets?.find((w) => w.name === "scenario");
+    const scen2 = node.widgets?.find((w) => w.name === "scenario_2");
     const body = {
         subject: subj?.value ?? "none",
         scenario: scen?.value ?? "none",
+        scenario_2: scen2?.value ?? "none",
     };
     let data;
     try {
@@ -50,17 +279,104 @@ async function fetchReadPair(node) {
         });
         data = await r.json();
     } catch (e) {
-        data = { subject_text: "", scenario_text: "", error: String(e) };
+        data = {
+            subject_text: "",
+            scenario_text: "",
+            scenario_2_text: "",
+            subject_error: String(e),
+        };
     }
+
+    const subjActive = body.subject && body.subject !== "none";
+    const scenActive = body.scenario && body.scenario !== "none";
+    const scen2Active = body.scenario_2 && body.scenario_2 !== "none";
+
     if (node.__lssSubjectTa) {
-        const t = data.subject_text ?? "";
-        const e = data.subject_error;
-        node.__lssSubjectTa.value = e ? `${t}\n[${e}]` : t;
+        setPane(
+            node.__lssSubjectTa,
+            node.__lssSubjectStatus,
+            subjActive ? data.subject_text ?? "" : "",
+            subjActive ? data.subject_error : null,
+            "__lssCanSaveSubject"
+        );
+        if (!subjActive) node.__lssCanSaveSubject = false;
     }
     if (node.__lssScenarioTa) {
-        const t = data.scenario_text ?? "";
-        const e = data.scenario_error;
-        node.__lssScenarioTa.value = e ? `${t}\n[${e}]` : t;
+        setPane(
+            node.__lssScenarioTa,
+            node.__lssScenarioStatus,
+            scenActive ? data.scenario_text ?? "" : "",
+            scenActive ? data.scenario_error : null,
+            "__lssCanSaveScenario"
+        );
+        if (!scenActive) node.__lssCanSaveScenario = false;
+    }
+    if (node.__lssScenario2Ta) {
+        setPane(
+            node.__lssScenario2Ta,
+            node.__lssScenario2Status,
+            scen2Active ? data.scenario_2_text ?? "" : "",
+            scen2Active ? data.scenario_2_error : null,
+            "__lssCanSaveScenario2"
+        );
+        if (!scen2Active) node.__lssCanSaveScenario2 = false;
+    }
+
+    setScenario2SlidersEnabled(node, scen2Active);
+    if (scen2Active) {
+        updateScenario2SlidersFromText(node);
+    }
+
+    clearLiveFlags(node);
+    syncLiveToWidgets(node);
+}
+
+async function saveLiveFiles(node) {
+    applyScenario2StrengthFromSliders(node);
+    syncLiveToWidgets(node);
+
+    const subj = node.widgets?.find((w) => w.name === "subject");
+    const scen = node.widgets?.find((w) => w.name === "scenario");
+    const scen2 = node.widgets?.find((w) => w.name === "scenario_2");
+
+    const body = { subject: subj?.value ?? "none", scenario: scen?.value ?? "none", scenario_2: scen2?.value ?? "none" };
+
+    if (node.__lssCanSaveSubject && String(node.__lssSubjectTa?.value ?? "").trim()) {
+        body.subject_text = node.__lssSubjectTa.value;
+    }
+    if (node.__lssCanSaveScenario && String(node.__lssScenarioTa?.value ?? "").trim()) {
+        body.scenario_text = node.__lssScenarioTa.value;
+    }
+    if (node.__lssCanSaveScenario2 && String(node.__lssScenario2Ta?.value ?? "").trim()) {
+        body.scenario_2_text = node.__lssScenario2Ta.value;
+    }
+
+    if (!body.subject_text && !body.scenario_text && !body.scenario_2_text) {
+        alert("Nothing to save (empty panes or no file selected).");
+        return;
+    }
+
+    let res;
+    try {
+        const r = await fetch(`${LAZY_API}/save_live_files`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+        });
+        res = await r.json();
+    } catch (e) {
+        alert(String(e));
+        return;
+    }
+    if (res.error && !res.saved?.length) {
+        alert(res.error);
+        return;
+    }
+    const names = (res.saved || []).map((p) => p.split(/[/\\]/).pop()).join(", ");
+    if (res.errors?.length) {
+        alert(`Saved: ${names || "(none)"}\n\nWarnings:\n${res.errors.join("\n")}`);
+    } else {
+        alert(names ? `Saved: ${names}` : "Saved.");
     }
 }
 
@@ -73,44 +389,139 @@ function chainWidgetCallback(widget, fn) {
     };
 }
 
+function restoreFromStored(node) {
+    const subj = node.widgets?.find((w) => w.name === "subject");
+    const scen = node.widgets?.find((w) => w.name === "scenario");
+    const scen2 = node.widgets?.find((w) => w.name === "scenario_2");
+    const subjLiveW = node.widgets?.find((w) => w.name === "subject_live");
+    const scenLiveW = node.widgets?.find((w) => w.name === "scenario_live");
+    const scen2LiveW = node.widgets?.find((w) => w.name === "scenario_2_live");
+    const stored = node.properties?.vsaan212_lssa;
+
+    const subjText = subjLiveW?.value ?? stored?.subject_live ?? "";
+    const scenText = scenLiveW?.value ?? stored?.scenario_live ?? "";
+    const scen2Text = scen2LiveW?.value ?? stored?.scenario_2_live ?? "";
+    const hasBuffered =
+        String(subjText).length > 0 ||
+        String(scenText).length > 0 ||
+        String(scen2Text).length > 0;
+
+    if (!hasBuffered) return false;
+
+    node.__lssSubjectTa.value = subjText;
+    node.__lssScenarioTa.value = scenText;
+    node.__lssScenario2Ta.value = scen2Text;
+    node.__lssCanSaveSubject = subj?.value && subj.value !== "none";
+    node.__lssCanSaveScenario = scen?.value && scen.value !== "none";
+    node.__lssCanSaveScenario2 = scen2?.value && scen2.value !== "none";
+
+    const scen2Active = scen2?.value && scen2.value !== "none";
+    setScenario2SlidersEnabled(node, scen2Active);
+    if (scen2Active) {
+        if (stored?.scenario_2_high_strength != null) {
+            node.__lssUpdatingSliders = true;
+            setWidgetValue(node, "scenario_2_high_strength", stored.scenario_2_high_strength);
+            setWidgetValue(node, "scenario_2_low_strength", stored.scenario_2_low_strength ?? 1.0);
+            node.__lssUpdatingSliders = false;
+            applyScenario2StrengthFromSliders(node);
+        } else {
+            updateScenario2SlidersFromText(node);
+        }
+    }
+
+    syncLiveToWidgets(node);
+    return true;
+}
+
 function buildLiveDom(node) {
     const wrap = document.createElement("div");
     wrap.className = "vsaan-lssa-live-wrap";
-    wrap.style.cssText =
-        "width:100%;display:flex;flex-direction:column;gap:6px;padding:4px 0;font-size:11px;";
+    wrap.style.cssText = [
+        "width:100%",
+        "min-width:380px",
+        "max-width:100%",
+        "display:flex",
+        "flex-direction:column",
+        "gap:6px",
+        "padding:4px 0",
+        "font-size:11px",
+        "box-sizing:border-box",
+    ].join(";");
 
     const mkLabel = (t) => {
         const el = document.createElement("div");
         el.textContent = t;
-        el.style.cssText = "opacity:0.85;font-weight:600;";
+        el.style.cssText = "opacity:0.85;font-weight:600;white-space:normal;";
         return el;
     };
 
-    const mkTa = (readonly, minH) => {
+    const mkStatus = () => {
+        const el = document.createElement("div");
+        el.style.cssText =
+            "display:none;font-size:10px;color:var(--error-text,#e88);margin-top:-4px;";
+        return el;
+    };
+
+    const mkTa = (minH, which) => {
         const ta = document.createElement("textarea");
-        ta.readOnly = readonly;
+        ta.readOnly = false;
         ta.spellcheck = false;
-        ta.style.cssText = `width:100%;min-height:${minH}px;resize:vertical;font-family:monospace;font-size:11px;background:var(--comfy-input-bg);color:var(--comfy-input-color);border:1px solid var(--border-color);border-radius:4px;padding:4px;box-sizing:border-box;`;
+        ta.__lssNode = node;
+        ta.__lssWhich = which;
+        ta.style.cssText = [
+            "width:100%",
+            "min-width:0",
+            `min-height:${minH}px`,
+            "resize:vertical",
+            "font-family:monospace",
+            "font-size:11px",
+            "background:var(--comfy-input-bg)",
+            "color:var(--comfy-input-color)",
+            "border:1px solid var(--border-color)",
+            "border-radius:4px",
+            "padding:4px",
+            "box-sizing:border-box",
+        ].join(";");
+        ta.addEventListener("input", () => {
+            markPaneLive(node, which);
+            if (which === "scenario_2" && !node.__lssUpdatingSliders) {
+                updateScenario2SlidersFromText(node);
+            }
+            syncLiveToWidgets(node);
+        });
         return ta;
     };
 
-    wrap.appendChild(mkLabel("Subject file (live)"));
-    const subjTa = mkTa(true, 96);
+    wrap.appendChild(mkLabel("Subject file (live — used on queue)"));
+    const subjTa = mkTa(96, "subject");
+    const subjStatus = mkStatus();
     wrap.appendChild(subjTa);
+    wrap.appendChild(subjStatus);
 
-    wrap.appendChild(mkLabel("Scenario file (live)"));
-    const scenTa = mkTa(true, 96);
+    wrap.appendChild(mkLabel("Scenario file (live — used on queue)"));
+    const scenTa = mkTa(96, "scenario");
+    const scenStatus = mkStatus();
     wrap.appendChild(scenTa);
+    wrap.appendChild(scenStatus);
 
-    wrap.appendChild(
-        mkLabel("scenario_template (stored in preset JSON; edit before Save preset)")
-    );
-    const tplTa = mkTa(false, 120);
-    wrap.appendChild(tplTa);
+    const sliderHost = document.createElement("div");
+    sliderHost.className = "vsaan-lssa-scenario2-sliders";
+    sliderHost.style.cssText = "display:flex;flex-direction:column;gap:2px;width:100%;";
+    wrap.appendChild(sliderHost);
+
+    wrap.appendChild(mkLabel("Scenario 2 file (live — used on queue)"));
+    const scen2Ta = mkTa(96, "scenario_2");
+    const scen2Status = mkStatus();
+    wrap.appendChild(scen2Ta);
+    wrap.appendChild(scen2Status);
 
     node.__lssSubjectTa = subjTa;
     node.__lssScenarioTa = scenTa;
-    node.__lssTemplateTa = tplTa;
+    node.__lssScenario2Ta = scen2Ta;
+    node.__lssSubjectStatus = subjStatus;
+    node.__lssScenarioStatus = scenStatus;
+    node.__lssScenario2Status = scen2Status;
+    node.__lssScenario2SliderHost = sliderHost;
 
     return wrap;
 }
@@ -122,135 +533,55 @@ app.registerExtension({
         if (nodeData.name !== "LazySubjectSceneAutomation") return;
 
         const origOnNodeCreated = nodeType.prototype.onNodeCreated;
+
         nodeType.prototype.onNodeCreated = function () {
             if (origOnNodeCreated) origOnNodeCreated.apply(this, arguments);
             const node = this;
-            ensurePresetWsListener();
+            ensureQueueHook();
+            hideLiveWidgets(node);
 
             const wrap = buildLiveDom(node);
+            const domOpts = {
+                getMinHeight: () => 380,
+                getMaxHeight: () => 900,
+                getMinWidth: () => NODE_MIN_WIDTH,
+            };
             if (typeof node.addDOMWidget === "function") {
-                node.addDOMWidget("lssa_live_previews", "live preview", wrap, {
-                    getMinHeight: () => 340,
-                    getMaxHeight: () => 920,
-                });
+                node.addDOMWidget("lssa_live_previews", "live preview", wrap, domOpts);
             } else if (node.domElement) {
                 node.domElement.appendChild(wrap);
             }
 
+            const placeSliders = () =>
+                relocateWidgetRows(
+                    node,
+                    SCENARIO2_SLIDER_WIDGETS,
+                    node.__lssScenario2SliderHost
+                );
+            placeSliders();
+            requestAnimationFrame(placeSliders);
+            setupScenario2Sliders(node);
+            hideLiveWidgets(node);
+
             const subj = node.widgets?.find((w) => w.name === "subject");
             const scen = node.widgets?.find((w) => w.name === "scenario");
-            const presetW = node.widgets?.find((w) => w.name === "preset_file");
+            const scen2 = node.widgets?.find((w) => w.name === "scenario_2");
 
-            chainWidgetCallback(subj, () => {
-                fetchReadPair(node);
-            });
-            chainWidgetCallback(scen, () => {
-                fetchReadPair(node);
-            });
+            chainWidgetCallback(subj, () => fetchReadPair(node));
+            chainWidgetCallback(scen, () => fetchReadPair(node));
+            chainWidgetCallback(scen2, () => fetchReadPair(node));
 
-            chainWidgetCallback(presetW, async (v) => {
-                if (!v || v === "(none)") return;
-                let data;
-                try {
-                    const r = await fetch(`${LAZY_API}/load_preset`, {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ preset: v }),
-                    });
-                    data = await r.json();
-                } catch (e) {
-                    alert(String(e));
-                    return;
-                }
-                if (data.error) {
-                    alert(data.error);
-                    return;
-                }
-                if (subj && data.subject != null) subj.value = data.subject;
-                if (scen && data.scenario != null) scen.value = data.scenario;
-                const pass = node.widgets?.find(
-                    (w) => w.name === "pass_subject_to_main_prompt"
-                );
-                if (pass && typeof data.pass_subject_to_main_prompt === "boolean") {
-                    pass.value = data.pass_subject_to_main_prompt;
-                }
-                if (node.__lssSubjectTa) node.__lssSubjectTa.value = data.subject_text ?? "";
-                if (node.__lssScenarioTa) {
-                    node.__lssScenarioTa.value = data.scenario_text ?? "";
-                }
-                if (node.__lssTemplateTa && data.scenario_template != null) {
-                    node.__lssTemplateTa.value = data.scenario_template;
-                }
-                node.setDirtyCanvas(true, true);
-            });
+            node.addWidget("button", "Save edits", null, () => saveLiveFiles(node));
 
-            node.addWidget("button", "Save preset", null, async () => {
-                const name = window.prompt(
-                    "Preset name (relative path without .json, e.g. mypack/studio):",
-                    "default"
-                );
-                if (name == null || !String(name).trim()) return;
-                const subjW = node.widgets?.find((w) => w.name === "subject");
-                const scenW = node.widgets?.find((w) => w.name === "scenario");
-                const passW = node.widgets?.find(
-                    (w) => w.name === "pass_subject_to_main_prompt"
-                );
-                const key = String(name).trim().replace(/\\/g, "/").replace(/\.json$/i, "");
-                const body = {
-                    name: key,
-                    subject: subjW?.value ?? "none",
-                    scenario: scenW?.value ?? "none",
-                    prepend_text: "",
-                    post_text: "",
-                    pass_subject_to_main_prompt: !!passW?.value,
-                    scenario_template: node.__lssTemplateTa?.value ?? "",
-                };
-                let res;
-                try {
-                    const r = await fetch(`${LAZY_API}/save_preset`, {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify(body),
-                    });
-                    res = await r.json();
-                } catch (e) {
-                    alert(String(e));
-                    return;
-                }
-                if (res.error) {
-                    alert(res.error);
-                    return;
-                }
-                if (presetW) {
-                    const cur = new Set(presetW.options.values || []);
-                    cur.add("(none)");
-                    cur.add(key);
-                    presetW.options.values = Array.from(cur).sort((a, b) =>
-                        String(a).localeCompare(String(b), undefined, {
-                            sensitivity: "base",
-                        })
-                    );
-                    presetW.value = key;
-                }
-                await fetchReadPair(node);
-                node.setDirtyCanvas(true, true);
-            });
+            if (!restoreFromStored(node)) {
+                setTimeout(() => fetchReadPair(node), 0);
+            } else {
+                const scen2Active = scen2?.value && scen2.value !== "none";
+                setScenario2SlidersEnabled(node, scen2Active);
+            }
 
-            fetch(`${LAZY_API}/default_scenario_template`)
-                .then((r) => r.json())
-                .then((d) => {
-                    const ta = node.__lssTemplateTa;
-                    if (ta && !String(ta.value || "").trim()) {
-                        ta.value = d.scenario_template || "";
-                    }
-                })
-                .catch(() => {});
-
-            setTimeout(() => fetchReadPair(node), 0);
-
-            const h = Math.max(node.size?.[1] || 0, 420);
-            const w = node.size?.[0] || 360;
-            node.setSize?.([w, h]);
+            ensureNodeMinSize(node);
+            requestAnimationFrame(() => ensureNodeMinSize(node));
         };
     },
 });

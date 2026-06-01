@@ -8,8 +8,8 @@ ComfyUI custom nodes: selectors, dual-stack subject/scene automation, text utili
 |------|----------------|------------|
 | **Subject Selector** | Load `.txt` from `subjectselector/SubjectFiles/` (recursive). | [docs/nodes/subject-selector.md](docs/nodes/subject-selector.md) |
 | **Scenario Selector** | Load `.txt` from `scenarioselector/ScenarioFiles/` (recursive). | [docs/nodes/scenario-selector.md](docs/nodes/scenario-selector.md) |
-| **Lazy-subject-and-scene-automation** | One node: subject + scenario files, Wan-style high/low LoRA stacks, `prompt` + `keywords`. Uses **`lazy_subject_scene_automation/SubjectFiles`** and **`…/ScenarioFiles`** (not the standalone selectors). | [docs/nodes/lazy-subject-scene-automation.md](docs/nodes/lazy-subject-scene-automation.md) |
-| **Text Split** | Split one string into chunks + remainder by separator or regex. | [docs/nodes/text-split.md](docs/nodes/text-split.md) |
+| **Lazy-subject-and-scene-automation** | One node: **one subject** + **two scenario** files (up to 6 scenario LoRA sets), Wan-style high/low stacks, `prompt` + `keywords`. **Live editors** on the node (queue uses pane text, not disk); **Save edits** to `.txt`; **scenario 2 strength** sliders override `[LoraHighA]` / `[LoraLowA]` model strength. Uses **`lazy_subject_scene_automation/SubjectFiles`** and **`…/ScenarioFiles`**. | [docs/nodes/lazy-subject-scene-automation.md](docs/nodes/lazy-subject-scene-automation.md) |
+| **Text Split** | Split by separator, regex, or **tagged format** (`[Tag]` headers). **Auto-detects** v2 subject/scenario files when the first line is `[LoraHighA]`; otherwise **`tagged_format`** or separator `#` for legacy graphs. | [docs/nodes/text-split.md](docs/nodes/text-split.md) |
 | **Optional Switch LoRA** | Apply a LoRA or pass through when path is `bypass` / empty. | [docs/nodes/optional-switch-lora.md](docs/nodes/optional-switch-lora.md) |
 | **Lazy Prompt Saver** | Save / clone / delete named prompts in `lazy_prompts.json`. | [docs/nodes/lazy-prompt-saver.md](docs/nodes/lazy-prompt-saver.md) |
 | **LazyPrompt** | Prompt Engineer (LTX / Wan / Flux / SDXL / Pony / SD 1.5), Vision Describe (Qwen2.5-VL), Unload local model. | [docs/nodes/lazyprompt.md](docs/nodes/lazyprompt.md) |
@@ -51,7 +51,14 @@ custom_nodes/vsaan212_workflow_utilities/
    └─ SubjectFiles/
 ```
 
-Put `.txt` files under the folder that matches the node you use. Dropdowns show **relative paths without `.txt`** (POSIX-style); nested subfolders are supported. Details and file formats: [lazy-subject-scene-automation.md](docs/nodes/lazy-subject-scene-automation.md).
+Put `.txt` files under the folder that matches the node you use. Dropdowns show **relative paths without `.txt`** (POSIX-style); nested subfolders are supported.
+
+**Subject & scenario file formats (selectors + Text Split)**
+
+- **Tagged (current):** sections start with a `[Tag]` line (e.g. `[LoraHighA]`, `[desciption]`), body on following lines until the next tag. Shipped examples: `Bypass and format example.txt`, `none.txt`.
+- **Legacy:** sections separated by a line containing only `#` (blank line, `#`, blank line).
+
+**Lazy-subject-and-scene-automation** parses tagged files internally. The browser extension **`js/lazy_subject_scene_live.js`** adds editable **subject / scenario / scenario 2** panes, **Save edits**, and **scenario 2 high/low strength** sliders (see [lazy-subject-scene-automation.md](docs/nodes/lazy-subject-scene-automation.md)). For **Subject Selector** / **Scenario Selector** → **Text Split**, v2 files (first line `[LoraHighA]`) split automatically; legacy `#` files use separator `#` unless you force **`tagged_format` ON**. Text Split details: [text-split.md](docs/nodes/text-split.md).
 
 ## Python dependencies
 

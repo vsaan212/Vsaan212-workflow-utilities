@@ -1,4 +1,4 @@
-__version__ = "1.6.0"
+__version__ = "1.7.0"
 __author__ = "Vsaan212"
 __title__ = "Vsaan212 Workflow Utilities"
 # custom_nodes/vsaan212_workflow_utilities/__init__.py
@@ -163,21 +163,6 @@ if LazySubjectSceneAutomation is not None:
         )
         return web.json_response(names)
 
-    from .lazy_subject_scene_automation.lazy_subject_scene_automation import (
-        DEFAULT_SCENARIO_TEMPLATE,
-        LAZY_PRESET_WS_EVENT,
-    )
-
-    @PromptServer.instance.routes.get("/vsaan212/lazy-subject-scene/presets")
-    async def get_lazy_presets(request):
-        return web.json_response(LazySubjectSceneAutomation.api_list_presets())
-
-    @PromptServer.instance.routes.get(
-        "/vsaan212/lazy-subject-scene/default_scenario_template"
-    )
-    async def get_lazy_default_scenario_template(request):
-        return web.json_response({"scenario_template": DEFAULT_SCENARIO_TEMPLATE})
-
     @PromptServer.instance.routes.post("/vsaan212/lazy-subject-scene/read_pair")
     async def post_lazy_read_pair(request):
         try:
@@ -187,33 +172,18 @@ if LazySubjectSceneAutomation is not None:
         data = LazySubjectSceneAutomation.api_read_pair(
             body.get("subject") or "none",
             body.get("scenario") or "none",
+            body.get("scenario_2") or "none",
         )
         return web.json_response(data)
 
-    @PromptServer.instance.routes.post("/vsaan212/lazy-subject-scene/load_preset")
-    async def post_lazy_load_preset(request):
-        try:
-            body = await request.json()
-        except Exception:
-            body = {}
-        preset = body.get("preset") or body.get("filename") or ""
-        data = LazySubjectSceneAutomation.api_load_preset(str(preset))
-        return web.json_response(data)
-
-    @PromptServer.instance.routes.post("/vsaan212/lazy-subject-scene/save_preset")
-    async def post_lazy_save_preset(request):
+    @PromptServer.instance.routes.post("/vsaan212/lazy-subject-scene/save_live_files")
+    async def post_lazy_save_live_files(request):
         try:
             body = await request.json()
         except Exception:
             return web.json_response({"error": "invalid JSON"}, status=400)
-        result = LazySubjectSceneAutomation.api_save_preset(body)
-        if result.get("ok"):
-            LazySubjectSceneAutomation.refresh_presets_list()
-            PromptServer.instance.send_sync(
-                LAZY_PRESET_WS_EVENT,
-                {"presets": LazySubjectSceneAutomation.presets_relpaths},
-            )
-        status = 400 if result.get("error") else 200
+        result = LazySubjectSceneAutomation.api_save_live_files(body)
+        status = 400 if result.get("error") and not result.get("saved") else 200
         return web.json_response(result, status=status)
 
 # --- Merge exports for ComfyUI ---
