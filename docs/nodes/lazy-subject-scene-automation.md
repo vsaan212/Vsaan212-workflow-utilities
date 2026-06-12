@@ -6,7 +6,7 @@ For an end-to-end workflow narrative (how the node, Python module, HTTP routes, 
 
 Combines optional-switch LoRA behavior, subject/scenario file selection, and formatted prompt output for **dual high/low** Wan-style workflows (and similar two-branch model graphs).
 
-**Recent (v1.7.0):** second scenario file (`scenario_2`), on-node **live editors** (queue uses pane text), **Save edits** to disk, and **scenario 2 strength** sliders that override `[LoraHighA]` / `[LoraLowA]` model strength in the scenario 2 live buffer.
+**Recent (v1.8.0):** scenario **`[Prompt]`** → **`prompt_override`** output (LazyPrompt **`prompt_override_input`**), **`{a|b|c}`** random choices in scenario text, multiline **`[Prompt]`** bodies (bracket lines no longer truncate), README workflow screenshot + wiring guide.
 
 ## File locations (important)
 
@@ -59,6 +59,8 @@ Dropdown lists refresh when the node is created; use ComfyUI **`R`** after addin
 | `model_high` / `model_low` | After merged LoRA stacks. |
 | `keywords` | `KeywordA/B/C` from the subject file, then scenario 1, then scenario 2, joined with `", "` and a trailing `", "` when non-empty. |
 | `clip_high` / `clip_low` | After the same stacks as the paired model outputs. |
+| `subject_description` | Raw subject-side description only (no prepend/post). |
+| `prompt_override` | **Prompt override output** — text from scenario `[Prompt]` blocks (scenario 1 and/or 2). Empty when files use `[desciption]` instead. Wire to LazyPrompt **prompt_override_input**. Not included in the main `prompt` output. |
 
 ## LoRA application order
 
@@ -171,6 +173,7 @@ If only **one** path section exists before the description, that LoRA is applied
 | `LoraHighC` / `LoraLowC` | Optional pair (slot C). |
 | `KeywordA` / `KeywordB` / `KeywordC` | Appended after subject keywords in `keywords`. |
 | `description` or `desciption` | Scenario text; appears after the subject block in `prompt`. |
+| `Prompt` | **Mutually exclusive with `description`/`desciption`.** Body is sent on **`prompt_override`** (for LazyPrompt LLM override), not in the main `prompt` output. If both tags exist, **`Prompt` wins**. Multiline bodies include all lines until the next **known** `[Tag]` section (lines with other `[brackets]` stay in the prompt). |
 
 **Deprecated (still read):** `ScenarioLoraHigh` / `ScenarioLoraLow` for slot A; `OptionalScenarioALoraHigh` / `OptionalScenarioALoraLow` for slot B; `OptionalScenarioBLoraHigh` / `OptionalScenarioBLoraLow` for slot C.
 
@@ -195,6 +198,30 @@ Aesthetics
 A blond girl jumps on a trampoline
 ```
 
+### Random prompt choices `{a|b|c}`
+
+In **scenario** files only (v2 tagged bodies: **`[desciption]`**, **`[Prompt]`**, **`KeywordA`**–**`KeywordC`**), you can embed **random alternatives** using curly braces and pipe separators:
+
+```text
+[desciption]
+A blond girl walks to the {left|right} side of the frame
+```
+
+```text
+[Prompt]
+Cinematic shot, camera pans {left|right}, {morning|evening} light
+```
+
+**Behavior:**
+
+- Each `{option1|option2|…}` group picks **one** alternative at **queue time** (new random pick every run).
+- Multiple groups in the same line are expanded independently (`{left|right} and {up|down}` → four possible outcomes).
+- Innermost `{…}` groups resolve first, so nested patterns like `{wide|{medium|tight}}` work.
+- LoRA path lines are **not** expanded (only description, Prompt, and keyword text after parsing).
+- Live editor panes and **Save edits** keep the **source** text with `{…}`; expansion happens in **`run`**, not in **`read_pair`** preview loads.
+
+This replaces an external random-prompt handler for scenario-side variation. Wire **`[Prompt]`** with random groups to **`prompt_override`** → LazyPrompt **`prompt_override_input`** when using the LLM path.
+
 ---
 
 ## Live editors, scenario 2 strength, and HTTP API
@@ -214,6 +241,7 @@ The extension **`js/lazy_subject_scene_live.js`** (loaded via the pack `WEB_DIRE
 - After you **edit a pane**, that side’s live buffer is used on **queue** (via hidden sync widgets), even if you have not saved to disk.
 - Changing a **dropdown** reloads that pane from disk via **`read_pair`** (unless the workflow already stored live text).
 - **`Save edits`** POSTs only non-empty panes for paths that are not `none`; empty panes are skipped.
+- **`{a|b|c}` random groups** in scenario text are expanded when the graph **runs**, not when live panes reload from disk.
 
 ### Scenario 2 strength sliders
 

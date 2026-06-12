@@ -60,6 +60,46 @@ Put `.txt` files under the folder that matches the node you use. Dropdowns show 
 
 **Lazy-subject-and-scene-automation** parses tagged files internally. The browser extension **`js/lazy_subject_scene_live.js`** adds editable **subject / scenario / scenario 2** panes, **Save edits**, and **scenario 2 high/low strength** sliders (see [lazy-subject-scene-automation.md](docs/nodes/lazy-subject-scene-automation.md)). For **Subject Selector** / **Scenario Selector** → **Text Split**, v2 files (first line `[LoraHighA]`) split automatically; legacy `#` files use separator `#` unless you force **`tagged_format` ON**. Text Split details: [text-split.md](docs/nodes/text-split.md).
 
+## Example workflow (Lazy automation + LazyPrompt)
+
+This pack is meant to replace long chains of selector + LoRA + text nodes with **one automation node** plus **LazyPrompt** for LLM expansion. The screenshot below is a typical LTX / LM Studio graph:
+
+![Lazy automation wired to LazyPrompt — Prompt Engineer and Vision Describe](docs/images/lazy-prompt-workflow-example.png)
+
+Full node reference: [lazy-subject-scene-automation-workflow.md](docs/workflows/lazy-subject-scene-automation-workflow.md) · [lazyprompt.md](docs/nodes/lazyprompt.md)
+
+### How to wire it
+
+**1. Lazy-subject-and-scene-automation (center)**  
+- Connect **`model_high`** / **`clip_high`** and **`model_low`** / **`clip_low`** from your checkpoint branches (Wan-style dual stack).  
+- Pick **`subject`**, **`scenario`**, and optional **`scenario_2`** from the dropdowns (`.txt` under `lazy_subject_scene_automation/SubjectFiles` and `…/ScenarioFiles`).  
+- Edit the **live** panes on the node; queue uses that text (not necessarily disk). Use **Save edits** to write back to `.txt`.  
+- Optional **`prepend_text`** / **`post_text`**: wire STRING inputs (e.g. **Lazy Prompt Saver** for a saved prefix, **User Text** or any string node for postfix).  
+- Outputs **`model_*`**, **`clip_*`**, **`keywords`**, and **`prompt`** go to the rest of your sampling / CLIP graph.  
+- Output **`prompt_override`**: wire when a scenario file uses a **`[Prompt]`** block (see below).
+
+**2. LazyPrompt — Prompt Engineer (LLM)**  
+- **`user_input`**: your rough idea (or leave minimal when override carries the scene).  
+- **`prompt_override_input`** ← **`prompt_override`** from the automation node when the scenario file defines **`[Prompt]`** instead of **`[desciption]`**. When connected/non-empty, this **replaces `user_input`** for the LM Studio / local HF request. You can also wire a **Lazy Prompt Saver** here for a fixed override string.  
+- **`scene_context`** ← **LazyPrompt — Vision Describe** (or paste text manually).  
+- **`image`**: optional reference frame for **LM Studio (API)** with a vision model loaded.  
+- Set **`target_model`**, **`model`** (e.g. **LM Studio (API)**), **`lm_studio_model`**, and token/temperature as needed.  
+- Use output **`PROMPT`** downstream (encode, preview, etc.).
+
+**3. LazyPrompt — Vision Describe (optional)**  
+- **`image`** ← **Load Image** (or any IMAGE output).  
+- **`scene_context`** → Prompt Engineer **`character`** or **`scene_context`** (graph above uses **`character`**).  
+- Run once per reference frame; caption text steers the LLM without inventing the subject from scratch.
+
+**4. Scenario file tips for this graph**  
+- **`[desciption]`** → merged into automation **`prompt`** (CLIP-side text).  
+- **`[Prompt]`** → sent on **`prompt_override`** only (LLM path); mutually exclusive with **`[desciption]`** in the same file.  
+- **`{left|right}`** in scenario text → random choice each queue run.  
+- **`scenario_2`** + strength sliders → second scenario LoRA set and tunable `[LoraHighA]` / `[LoraLowA]` model strength.
+
+**5. Lazy Prompt Saver (optional)**  
+- Saved snippets for **`prepend_text`**, manual **`prompt_override_input`**, or ad-hoc **`user_input`** copy/paste — not required if you only use live editors and scenario files.
+
 ## Python dependencies
 
 Install from `requirements.txt` if your ComfyUI environment is missing anything (`transformers`, `torch`, `qwen-vl-utils`, `Pillow`, `numpy`, etc.).
@@ -79,9 +119,6 @@ Install from `requirements.txt` if your ComfyUI environment is missing anything 
 - **New `.txt` files not in dropdown:** Press **`R`** in ComfyUI or recreate the node. Lazy-subject-and-scene-automation also refreshes via `/vsaan212/lazy-subject-scene/…` when the node is created.
 - **Same filename in two folders:** Use the full relative path in the dropdown.
 - **Line endings:** Nodes normalize `\r\n` / `\r` to `\n`.
-
-### Example workflow screenshot (depricated, the new node removes the need for this)
-<img width="2409" height="1254" alt="image" src="https://github.com/user-attachments/assets/704942fe-796c-422b-888b-3ebab1fd838c" />
 
 ## License
 MIT (see `LICENSE`)

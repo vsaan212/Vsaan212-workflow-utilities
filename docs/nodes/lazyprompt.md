@@ -22,9 +22,10 @@ Three related nodes for LLM-assisted prompting inside ComfyUI.
 2. Set **`model`** to either a **local Hugging Face** Gemma-style LLM (8B/3B paths) or **LM Studio (API)**.
 3. Enter your idea in **`user_input`** (and optional **`character`**, **`lora_triggers`**, **`environment`** preset).
 4. Optional **`scene_context`** — connect text from **Vision Describe** or any frame/scene description.
-5. Optional **`image`** — **LM Studio only**, when using a **vision** model in LM Studio: start frame or reference is sent as JPEG in an OpenAI-style chat (same general pattern as ComfyExpo LM Studio nodes). **Ignored** for local 8B/3B Transformers backends; use Vision Describe → `scene_context` instead.
-6. **`bypass`** ON skips the LLM and passes **`user_input`** through (good for debugging graphs).
-7. Outputs: **`PROMPT`** (use for encoding), **`PREVIEW`** (duplicate for UI), **`NEG_PROMPT`** (where the stack splits negatives for SDXL/Pony/SD1.5 tag formats).
+5. Optional **`prompt_override_input`** — when wired/non-empty, **replaces `user_input`** for the LLM request (LM Studio API and local HF). Typical source: **`prompt_override`** from **Lazy-subject-and-scene-automation** when the scenario file uses a **`[Prompt]`** block instead of **`[desciption]`**.
+6. Optional **`image`** — **LM Studio only**, when using a **vision** model in LM Studio: start frame or reference is sent as JPEG in an OpenAI-style chat (same general pattern as ComfyExpo LM Studio nodes). **Ignored** for local 8B/3B Transformers backends; use Vision Describe → `scene_context` instead.
+7. **`bypass`** ON skips the LLM and passes the effective user text through (override if connected, else **`user_input`**).
+8. Outputs: **`PROMPT`** (use for encoding), **`PREVIEW`** (duplicate for UI), **`NEG_PROMPT`** (where the stack splits negatives for SDXL/Pony/SD1.5 tag formats).
 
 ### Operational tips
 

@@ -271,6 +271,15 @@ class LazyPromptEngineer:
                         "Ignored when using local Hugging Face text-only models — use LazyPrompt — Vision Describe + scene_context instead."
                     ),
                 }),
+                "prompt_override_input": ("STRING", {
+                    "default": "",
+                    "forceInput": True,
+                    "multiline": True,
+                    "tooltip": (
+                        "When connected/non-empty, replaces user_input for the LLM request "
+                        "(LM Studio API and local HF). Wire from Lazy-subject-and-scene-automation prompt_override."
+                    ),
+                }),
             },
         }
 
@@ -699,12 +708,20 @@ class LazyPromptEngineer:
         lora_triggers="",
         character="",
         image=None,
+        prompt_override_input="",
     ):
+        override_text = (prompt_override_input or "").strip()
+        effective_user = override_text or (user_input or "").strip()
+        if override_text:
+            print(
+                "[LazyPrompt] prompt_override_input replaces user_input for this LLM request."
+            )
+
         # ── Bypass mode — no model loaded, input passed straight through ────────
         if bypass:
             print("[LazyPrompt] Bypass ON — skipping model, passing user_input directly.")
-            neg_prompt = _build_negative_prompt("", user_input)
-            return (user_input.strip(), user_input.strip(), neg_prompt)
+            neg_prompt = _build_negative_prompt("", effective_user)
+            return (effective_user, effective_user, neg_prompt)
 
         use_lm_studio = model == "LM Studio (API)"
         if image is not None and not use_lm_studio:
@@ -837,8 +854,8 @@ class LazyPromptEngineer:
             re.IGNORECASE,
         )
 
-        is_explicit    = bool(_explicit_re.search(user_input))
-        is_sensual     = bool(_sensual_re.search(user_input)) and not is_explicit
+        is_explicit    = bool(_explicit_re.search(effective_user))
+        is_sensual     = bool(_sensual_re.search(effective_user)) and not is_explicit
 
         # Undressing detection still used inside tier 3 for the mandatory segment rule
         _undress_re = re.compile(
@@ -849,7 +866,7 @@ class LazyPromptEngineer:
             r"shed\w*\s+(her|his|their)?\s*(clothes|clothing|shirt|dress))\b",
             re.IGNORECASE,
         )
-        has_undressing = bool(_undress_re.search(user_input))
+        has_undressing = bool(_undress_re.search(effective_user))
 
         if is_explicit:
             # ── Tier 3: user asked for explicit content ──────────────────────
@@ -902,7 +919,7 @@ class LazyPromptEngineer:
         _sequence_re = re.compile(
             r"^\s*(\d+[\.\):])\s+.+", re.MULTILINE
         )
-        sequence_steps = _sequence_re.findall(user_input)
+        sequence_steps = _sequence_re.findall(effective_user)
         if len(sequence_steps) >= 2:
             step_count = len(sequence_steps)
             sequence_instruction = (
@@ -926,7 +943,7 @@ class LazyPromptEngineer:
             r"player|nurse|doctor|student|teacher|child|children|kid|kids|crowd|audience)\b",
             re.IGNORECASE,
         )
-        has_person = bool(_person_re.search(user_input + " " + scene_context))
+        has_person = bool(_person_re.search(effective_user + " " + scene_context))
         if not has_person:
             no_person_instruction = (
                 "\n[SCENE INSTRUCTION: The user has not described any person or character. "
@@ -953,7 +970,7 @@ class LazyPromptEngineer:
             r"couple|trio|they\s+(kiss|touch|embrace|undress|fuck|have))\b",
             re.IGNORECASE,
         )
-        has_multi_subject = bool(_multi_re.search(user_input + " " + scene_context))
+        has_multi_subject = bool(_multi_re.search(effective_user + " " + scene_context))
         if has_multi_subject:
             multi_instruction = (
                 "\n[MULTI-SUBJECT INSTRUCTION: This scene has two or more people. "
@@ -983,7 +1000,7 @@ class LazyPromptEngineer:
                 "Never write a bare floating quote. Never use [DIALOGUE: ...] tags. Dialogue is part of the prose, always.]"
             )
         else:
-            has_user_dialogue = bool(re.search(r'["\u201c\u201d]', user_input))
+            has_user_dialogue = bool(re.search(r'["\u201c\u201d]', effective_user))
             if has_user_dialogue:
                 dialogue_instruction = (
                     "\n\n[DIALOGUE INSTRUCTION: Use ONLY the dialogue the user provided — do not invent or add any additional spoken words. "
@@ -1009,10 +1026,10 @@ class LazyPromptEngineer:
                 f"of the subject and setting; do not invent or contradict it]\n"
                 f"{scene_context.strip()}\n\n"
                 f"[USER DIRECTION — apply this as action, style, and mood over the above scene]\n"
-                f"{user_input.strip()}"
+                f"{effective_user}"
             )
         else:
-            effective_input = user_input.strip()
+            effective_input = effective_user
 
         if minimal_llm:
             print(
@@ -1101,7 +1118,7 @@ class LazyPromptEngineer:
                 ttl_seconds=int(lm_studio_ttl or 0),
             )
             result = self._clean_output(result)
-            result, neg_prompt = self._finalize_output(target_model, result, user_input)
+            result, neg_prompt = self._finalize_output(target_model, result, effective_user)
             return (result, result, neg_prompt)
 
         # ── HuggingFace path: tokenize, generate, decode ──────────────────────
@@ -1161,7 +1178,7 @@ class LazyPromptEngineer:
         # Regex clean as a last-resort safety net (should rarely trigger now)
         result = self._clean_output(result)
 
-        result, neg_prompt = self._finalize_output(target_model, result, user_input)
+        result, neg_prompt = self._finalize_output(target_model, result, effective_user)
 
         if not keep_model_loaded:
             self.unload_model()

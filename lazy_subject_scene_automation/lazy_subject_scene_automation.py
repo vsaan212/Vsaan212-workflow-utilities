@@ -8,6 +8,7 @@ in both subject and scenario files; older SubjectLora* / ScenarioLora* tags rema
 from __future__ import annotations
 
 import os
+import random
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -24,6 +25,39 @@ _LAZY_V2_STEM_TEMPLATE = (
     "bypass\n"
     "[desciption]\n"
 )
+
+
+def _expand_random_brace_choices(text: str) -> str:
+    """
+    Expand {a|b|c} to one random alternative (innermost groups first).
+    Used in scenario description, Prompt, and keyword bodies at queue time.
+    """
+    if not text or "{" not in text:
+        return text
+    out = text
+    pattern = re.compile(r"\{([^{}]*)\}")
+    while True:
+        m = pattern.search(out)
+        if not m:
+            break
+        options = m.group(1).split("|")
+        choice = random.choice(options) if options else ""
+        out = out[: m.start()] + choice + out[m.end() :]
+    return out
+
+
+def _expand_random_in_keywords(keywords: List[str]) -> List[str]:
+    return [_expand_random_brace_choices(k) for k in keywords]
+
+
+def _expand_scenario_random_fields(
+    description: str, prompt_override: str, keywords: List[str]
+) -> Tuple[str, str, List[str]]:
+    return (
+        _expand_random_brace_choices(description),
+        _expand_random_brace_choices(prompt_override),
+        _expand_random_in_keywords(keywords),
+    )
 
 
 def _normalize_rel_no_ext(rel: str) -> str:
@@ -174,6 +208,48 @@ def _norm_tag(tag: str) -> str:
     return re.sub(r"[^a-z0-9]", "", (tag or "").lower())
 
 
+# v2 section headers only — do not treat arbitrary "[...]" lines in multiline bodies as new tags.
+_KNOWN_V2_SECTION_TAGS = frozenset(
+    {
+        "lorahigha",
+        "loralowa",
+        "lorahighb",
+        "loralowb",
+        "lorahighc",
+        "loralowc",
+        "keyworda",
+        "keywordb",
+        "keywordc",
+        "description",
+        "desciption",
+        "prompt",
+        "subjectlorahigh",
+        "subjectloralow",
+        "scenariolorahigh",
+        "scenarioloralow",
+        "optionalloraahigh",
+        "optionalloraalow",
+        "optionallorabhigh",
+        "optionallorablow",
+        "optionalscenarioalorahigh",
+        "optionalscenarioaloralow",
+        "optionalscenarioblorahigh",
+        "optionalscenariobloralow",
+    }
+)
+
+
+def _is_v2_tag_header_line(line: str) -> bool:
+    """True when line opens a known v2 [Tag] section (not arbitrary bracket text in a body)."""
+    stripped = (line or "").strip()
+    if not stripped.startswith("["):
+        return False
+    groups = re.findall(r"\[([^\]]*)\]", stripped)
+    if not groups:
+        return False
+    return _norm_tag(groups[0]) in _KNOWN_V2_SECTION_TAGS
+
+
 def _bypass_path(body: str) -> bool:
     s = (body or "").strip().strip('"').strip("'")
     return not s or s.lower() == "bypass"
@@ -243,7 +319,7 @@ def _parse_tagged_blocks(content: str) -> Dict[str, Tuple[str, float, float]]:
         body_lines: List[str] = []
         while i < n:
             nxt = lines[i]
-            if nxt.strip().startswith("["):
+            if _is_v2_tag_header_line(nxt):
                 break
             body_lines.append(nxt)
             i += 1
@@ -423,6 +499,26 @@ def _description_from_blocks(blocks: Dict[str, Tuple[str, float, float]]) -> str
     return ""
 
 
+def _prompt_from_blocks(blocks: Dict[str, Tuple[str, float, float]]) -> str:
+    b = blocks.get(_norm_tag("prompt"))
+    if b:
+        return (b[0] or "").strip()
+    return ""
+
+
+def _scenario_description_and_prompt(
+    blocks: Dict[str, Tuple[str, float, float]],
+) -> Tuple[str, str]:
+    """
+    Scenario side: [Prompt] OR [description]/[desciption], not both.
+    If [Prompt] is present and non-empty, it wins and description is empty.
+    """
+    prompt = _prompt_from_blocks(blocks)
+    if prompt:
+        return "", prompt
+    return _description_from_blocks(blocks), ""
+
+
 def parse_subject_text(content: str) -> Tuple[List[ApplySlot], List[ApplySlot], str, List[str]]:
     content = (content or "").strip().replace("\r\n", "\n").replace("\r", "\n")
     if not content:
@@ -460,21 +556,23 @@ def parse_subject_text(content: str) -> Tuple[List[ApplySlot], List[ApplySlot], 
     return high, low, desc, []
 
 
-def parse_scenario_text(content: str) -> Tuple[List[ApplySlot], List[ApplySlot], str, List[str]]:
+def parse_scenario_text(
+    content: str,
+) -> Tuple[List[ApplySlot], List[ApplySlot], str, List[str], str]:
     content = (content or "").strip().replace("\r\n", "\n").replace("\r", "\n")
     if not content:
-        return [], [], "", []
+        return [], [], "", [], ""
 
     if _is_tagged_format(content):
         blocks = _parse_tagged_blocks(content)
         hi, lo = _scenario_stacks_from_blocks(blocks)
-        desc = _description_from_blocks(blocks)
+        desc, prompt_override = _scenario_description_and_prompt(blocks)
         kws = _keywords_from_blocks(blocks)
-        return hi, lo, desc, kws
+        return hi, lo, desc, kws, prompt_override
 
     parts = _split_v1_sections(content)
     if not parts:
-        return [], [], "", []
+        return [], [], "", [], ""
 
     desc = parts[-1] if len(parts) > 1 else (parts[0] if len(parts) == 1 else "")
     path_parts = parts[:-1] if len(parts) > 1 else []
@@ -494,7 +592,7 @@ def parse_scenario_text(content: str) -> Tuple[List[ApplySlot], List[ApplySlot],
             high.append((q, 1.0, 1.0))
             low.append((q, 1.0, 1.0))
 
-    return high, low, desc, []
+    return high, low, desc, [], ""
 
 
 def _merge_stacks(*parts: List[ApplySlot]) -> List[ApplySlot]:
@@ -807,7 +905,7 @@ class LazySubjectSceneAutomation:
             },
         }
 
-    RETURN_TYPES = ("STRING", "MODEL", "MODEL", "STRING", "CLIP", "CLIP", "STRING")
+    RETURN_TYPES = ("STRING", "MODEL", "MODEL", "STRING", "CLIP", "CLIP", "STRING", "STRING")
     RETURN_NAMES = (
         "prompt",
         "model_high",
@@ -816,6 +914,7 @@ class LazySubjectSceneAutomation:
         "clip_high",
         "clip_low",
         "subject_description",
+        "prompt_override",
     )
     FUNCTION = "run"
     CATEGORY = "vsaan212/automation"
@@ -873,8 +972,11 @@ class LazySubjectSceneAutomation:
             preview_err.append(f"scenario 2 file: {scen2_err}")
 
         sh, sl, sdesc, skw = parse_subject_text(subj_raw)
-        ch, cl, cdesc, ckw = parse_scenario_text(scen_raw)
-        ch2, cl2, cdesc2, ckw2 = parse_scenario_text(scen2_raw)
+        ch, cl, cdesc, ckw, cprompt = parse_scenario_text(scen_raw)
+        ch2, cl2, cdesc2, ckw2, cprompt2 = parse_scenario_text(scen2_raw)
+
+        cdesc, cprompt, ckw = _expand_scenario_random_fields(cdesc, cprompt, ckw)
+        cdesc2, cprompt2, ckw2 = _expand_scenario_random_fields(cdesc2, cprompt2, ckw2)
 
         hi = _merge_stacks(sh, ch, ch2)
         lo = _merge_stacks(sl, cl, cl2)
@@ -885,6 +987,7 @@ class LazySubjectSceneAutomation:
         subject_description = (sdesc or "").strip()
         subj_for_main = sdesc if pass_subject_to_main_prompt else ""
         scen_desc = _combine_scenario_descriptions(cdesc, cdesc2)
+        prompt_override = _combine_scenario_descriptions(cprompt, cprompt2)
         prompt = _build_prompt(pre, post, subj_for_main, scen_desc)
         keywords = _format_keywords(skw, ckw, ckw2)
 
@@ -893,7 +996,16 @@ class LazySubjectSceneAutomation:
             prompt = err_hdr + prompt
             subject_description = err_hdr + subject_description
 
-        return (prompt, model_h, model_l, keywords, clip_h, clip_l, subject_description)
+        return (
+            prompt,
+            model_h,
+            model_l,
+            keywords,
+            clip_h,
+            clip_l,
+            subject_description,
+            prompt_override,
+        )
 
 
 NODE_CLASS_MAPPINGS = {

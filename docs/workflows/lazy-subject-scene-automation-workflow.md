@@ -41,6 +41,7 @@ Dropdowns are built when the node is created or when the server refreshes lists 
 | `clip_high` / `clip_low` | Same LoRA order as the paired model branch. |
 | `keywords` | Trigger-style tags from subject then scenario `KeywordA`–`KeywordC` blocks, comma-separated with a trailing comma when non-empty. |
 | `subject_description` | Raw subject-side description text only (no prepend/post); useful when `pass_subject_to_main_prompt` is off but you still need the subject text elsewhere. |
+| `prompt_override` | Scenario **`[Prompt]`** text for LazyPrompt (see node doc); empty when scenarios use **`[desciption]`** only. |
 
 ### 5. Live file preview (extension)
 
@@ -77,7 +78,7 @@ Optional **`prepend_text`**, **`post_text`**, and **`pass_subject_to_main_prompt
 3. **Parse** — `parse_subject_text` and `parse_scenario_text` (twice when `scenario_2` is set) return `(high_stack, low_stack, description, keyword_list)` per file. Format is **v2 tagged** if any non-empty line starts with `[`; otherwise **v1** `#`-section legacy rules apply (different high/low mapping for scenario vs subject in v1).
 4. **Merge stacks** — `_merge_stacks` concatenates on each branch: **subject LoRAs**, then **scenario 1 LoRAs**, then **scenario 2 LoRAs** (up to six scenario slots when both scenario files use A/B/C).
 5. **Apply** — `_apply_stack` walks the merged list with ComfyUI’s **`LoraLoader`**, resolving paths and registering custom LoRA directories when the path exists on disk.
-6. **Compose text** — `_build_prompt` interleaves prepend, optional subject description in the main prompt (controlled by the boolean), post text, and scenario description with intentional newlines. `_format_keywords` merges keyword lists.
+6. **Compose text** — `_build_prompt` interleaves prepend, optional subject description in the main prompt (controlled by the boolean), post text, and scenario description with intentional newlines. `_format_keywords` merges keyword lists. Scenario **`{a|b|c}`** groups are expanded randomly per run in description, Prompt, and keyword bodies.
 
 ---
 
