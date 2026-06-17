@@ -1,4 +1,4 @@
-__version__ = "1.8.0"
+__version__ = "1.9.0"
 __author__ = "Vsaan212"
 __title__ = "Vsaan212 Workflow Utilities"
 # custom_nodes/vsaan212_workflow_utilities/__init__.py
@@ -124,6 +124,16 @@ except Exception:
         PG_CLASSES = {}
         PG_DISPLAY = {}
 
+# Lazy Image Loader (aspect crop + live pan preview)
+try:
+    from .lazy_image_loader import (
+        NODE_CLASS_MAPPINGS as LIL_CLASSES,
+        NODE_DISPLAY_NAME_MAPPINGS as LIL_DISPLAY,
+    )
+except Exception:
+    LIL_CLASSES = {}
+    LIL_DISPLAY = {}
+
 # --- API routes for live folder scanning ---
 from aiohttp import web
 from server import PromptServer
@@ -213,3 +223,6 @@ NODE_DISPLAY_NAME_MAPPINGS.update(LP_DISPLAY)
 
 NODE_CLASS_MAPPINGS.update(PG_CLASSES)
 NODE_DISPLAY_NAME_MAPPINGS.update(PG_DISPLAY)
+
+NODE_CLASS_MAPPINGS.update(LIL_CLASSES)
+NODE_DISPLAY_NAME_MAPPINGS.update(LIL_DISPLAY)

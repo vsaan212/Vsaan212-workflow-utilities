@@ -1,6 +1,6 @@
 # Vsaan212-workflow-utilities
 
-ComfyUI custom nodes: selectors, dual-stack subject/scene automation, text utilities, optional LoRA bypass, prompt library, and **LazyPrompt** (multi-target prompt engineer + optional vision). MIT licensed.
+ComfyUI custom nodes: selectors, dual-stack subject/scene automation, text utilities, optional LoRA bypass, prompt library, **Lazy Image Loader**, and **LazyPrompt** (multi-target prompt engineer + optional vision). MIT licensed.
 
 ## Nodes (summary)
 
@@ -12,7 +12,8 @@ ComfyUI custom nodes: selectors, dual-stack subject/scene automation, text utili
 | **Text Split** | Split by separator, regex, or **tagged format** (`[Tag]` headers). **Auto-detects** v2 subject/scenario files when the first line is `[LoraHighA]`; otherwise **`tagged_format`** or separator `#` for legacy graphs. | [docs/nodes/text-split.md](docs/nodes/text-split.md) |
 | **Optional Switch LoRA** | Apply a LoRA or pass through when path is `bypass` / empty. | [docs/nodes/optional-switch-lora.md](docs/nodes/optional-switch-lora.md) |
 | **Lazy Prompt Saver** | Save / clone / delete named prompts in `lazy_prompts.json`. | [docs/nodes/lazy-prompt-saver.md](docs/nodes/lazy-prompt-saver.md) |
-| **LazyPrompt** | Prompt Engineer (LTX / Wan / Flux / SDXL / Pony / SD 1.5), Vision Describe (Qwen2.5-VL), Unload local model. | [docs/nodes/lazyprompt.md](docs/nodes/lazyprompt.md) |
+| **Lazy Image Loader** | Load from `input/`: browse, drag-and-drop upload, open input folder, **cover crop** to popular ratios (default **9:16**), live drag-to-position preview. | [docs/nodes/lazy-image-loader.md](docs/nodes/lazy-image-loader.md) |
+| **LazyPrompt** | Prompt Engineer (LTX / Wan / Flux / SDXL / Pony / SD 1.5), Vision Describe (Qwen2.5-VL), Unload local model. LM Studio API uses native `/api/v1/chat` with OpenAI fallback. | [docs/nodes/lazyprompt.md](docs/nodes/lazyprompt.md) |
 
 **Documentation index:** [docs/README.md](docs/README.md)
 
@@ -60,6 +61,8 @@ Put `.txt` files under the folder that matches the node you use. Dropdowns show 
 
 **Lazy-subject-and-scene-automation** parses tagged files internally. The browser extension **`js/lazy_subject_scene_live.js`** adds editable **subject / scenario / scenario 2** panes, **Save edits**, and **scenario 2 high/low strength** sliders (see [lazy-subject-scene-automation.md](docs/nodes/lazy-subject-scene-automation.md)). For **Subject Selector** / **Scenario Selector** → **Text Split**, v2 files (first line `[LoraHighA]`) split automatically; legacy `#` files use separator `#` unless you force **`tagged_format` ON**. Text Split details: [text-split.md](docs/nodes/text-split.md).
 
+**Lazy Image Loader** reads from ComfyUI’s global **`input/`** folder (not a pack subfolder). Extension **`js/lazy_image_loader.js`** adds the preview, pan crop, upload, and **Open input folder** button. Details: [lazy-image-loader.md](docs/nodes/lazy-image-loader.md).
+
 ## Example workflow (Lazy automation + LazyPrompt)
 
 This pack is meant to replace long chains of selector + LoRA + text nodes with **one automation node** plus **LazyPrompt** for LLM expansion. The screenshot below is a typical LTX / LM Studio graph:
@@ -87,7 +90,7 @@ Full node reference: [lazy-subject-scene-automation-workflow.md](docs/workflows/
 - Use output **`PROMPT`** downstream (encode, preview, etc.).
 
 **3. LazyPrompt — Vision Describe (optional)**  
-- **`image`** ← **Load Image** (or any IMAGE output).  
+- **`image`** ← **Lazy Image Loader** or **Load Image** (or any IMAGE output).  
 - **`scene_context`** → Prompt Engineer **`character`** or **`scene_context`** (graph above uses **`character`**).  
 - Run once per reference frame; caption text steers the LLM without inventing the subject from scratch.
 
@@ -119,6 +122,7 @@ Install from `requirements.txt` if your ComfyUI environment is missing anything 
 - **New `.txt` files not in dropdown:** Press **`R`** in ComfyUI or recreate the node. Lazy-subject-and-scene-automation also refreshes via `/vsaan212/lazy-subject-scene/…` when the node is created.
 - **Same filename in two folders:** Use the full relative path in the dropdown.
 - **Line endings:** Nodes normalize `\r\n` / `\r` to `\n`.
+- **Lazy Image Loader missing from menu:** Restart ComfyUI after updating the pack; node is under **`vsaan212/lazy`**.
 
 ## License
 MIT (see `LICENSE`)

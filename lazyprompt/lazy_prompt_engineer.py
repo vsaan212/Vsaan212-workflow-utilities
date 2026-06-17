@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import re
 import os
 import io
@@ -194,7 +196,7 @@ class LazyPromptEngineer:
                     "8B - NeuralDaredevil (High Quality)",
                     "3B - Llama-3.2 Abliterated (Low VRAM)",
                     "LM Studio (API)",
-                ], {"default": "LM Studio (API)", "tooltip": "Backend LLM: local HF checkpoints or LM Studio OpenAI-compatible API (no llama-server)."}),
+                ], {"default": "LM Studio (API)", "tooltip": "Backend LLM: local HF checkpoints or LM Studio REST API (native /api/v1/chat with OpenAI fallback)."}),
                 "local_path_8b": ("STRING", {
                     "default": "",
                     "multiline": False,
@@ -211,7 +213,7 @@ class LazyPromptEngineer:
                     "default": "",
                     "multiline": False,
                     "placeholder": "Model id as shown in LM Studio",
-                    "tooltip": "Required when model is LM Studio (API). LM Studio must be running on localhost:1234.",
+                    "tooltip": "Required when model is LM Studio (API). LM Studio 0.4+ uses /api/v1/chat; older versions fall back to /v1/chat/completions.",
                 }),
                 "lm_studio_ttl": ("INT", {
                     "default": 5,
@@ -219,7 +221,7 @@ class LazyPromptEngineer:
                     "max": 3600,
                     "step": 1,
                     "display": "number",
-                    "tooltip": "LM Studio only: idle seconds before the model unloads after this request (JSON ttl). 0 = omit (server default, often long).",
+                    "tooltip": "LM Studio OpenAI fallback only: idle seconds before JIT-loaded model unloads (JSON ttl). 0 = omit. Ignored on native /api/v1/chat.",
                 }),
                 "max_output_tokens": ("INT", {
                     "default": 900,
@@ -621,34 +623,51 @@ class LazyPromptEngineer:
         print(f"[LazyPrompt] Stop token IDs: {unique}")
         return unique
 
-    # Stop sequences for LM Studio API (OpenAI-compatible stop parameter)
+    # Stop sequences for LM Studio OpenAI-compatible fallback (/v1/chat/completions)
     LM_STUDIO_STOP = [
         "assistant", "user", "system",
         "<|eot_id|>", "<|end_of_turn|>", "<|im_end|>",
         "<end_of_turn>", "[/INST]", "### Human", "### Assistant",
     ]
 
-    def _generate_via_lm_studio(
-        self,
-        messages,
-        model_name: str,
-        temperature: float,
-        max_tokens: int,
-        stop: list,
-        ttl_seconds: int = 0,
-    ) -> str:
-        """Call LM Studio OpenAI-compatible API; returns raw assistant content."""
-        url = "http://localhost:1234/v1/chat/completions"
-        body = {
-            "model": model_name,
-            "messages": messages,
-            "temperature": temperature,
-            "max_tokens": max_tokens,
-            "stop": stop,
-            "top_p": 0.9,
-        }
-        if ttl_seconds and ttl_seconds > 0:
-            body["ttl"] = int(ttl_seconds)
+    LM_STUDIO_BASE_URL = "http://localhost:1234"
+
+    @staticmethod
+    def _lm_studio_messages_to_parts(messages) -> tuple[str, str, str | None]:
+        """OpenAI-style messages → (system_prompt, user_text, optional image data URL)."""
+        system_prompt = ""
+        user_text = ""
+        image_url = None
+        for msg in messages:
+            role = msg.get("role")
+            content = msg.get("content")
+            if role == "system":
+                system_prompt = content if isinstance(content, str) else str(content or "")
+            elif role == "user":
+                if isinstance(content, list):
+                    for part in content:
+                        if not isinstance(part, dict):
+                            continue
+                        if part.get("type") == "text":
+                            user_text = part.get("text") or ""
+                        elif part.get("type") == "image_url":
+                            image_url = (part.get("image_url") or {}).get("url")
+                else:
+                    user_text = content if isinstance(content, str) else str(content or "")
+        return system_prompt, user_text, image_url
+
+    @staticmethod
+    def _lm_studio_build_v1_input(user_text: str, image_url: str | None):
+        if image_url:
+            return [
+                {"type": "text", "content": user_text},
+                {"type": "image", "data_url": image_url},
+            ]
+        return user_text
+
+    @classmethod
+    def _lm_studio_post(cls, path: str, body: dict, timeout: int = 300) -> dict:
+        url = f"{cls.LM_STUDIO_BASE_URL}{path}"
         data = json.dumps(body).encode("utf-8")
         req = urllib.request.Request(
             url,
@@ -659,28 +678,156 @@ class LazyPromptEngineer:
                 "Authorization": "Bearer lm-studio",
             },
         )
-        try:
-            with urllib.request.urlopen(req, timeout=300) as resp:
-                out = json.loads(resp.read().decode("utf-8"))
-        except urllib.error.URLError as e:
-            raise RuntimeError(
-                f"[LazyPrompt] LM Studio API error: {e}. Is LM Studio running with the model loaded? "
-                f"Check the model name matches exactly."
-            ) from e
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+
+    @staticmethod
+    def _lm_studio_parse_v1_response(out: dict) -> str:
+        parts = []
+        for item in out.get("output") or []:
+            if isinstance(item, dict) and item.get("type") == "message":
+                parts.append(item.get("content") or "")
+        return "".join(parts).strip()
+
+    @staticmethod
+    def _lm_studio_parse_openai_response(out: dict) -> str:
         choices = out.get("choices")
         if not choices:
-            raise RuntimeError("[LazyPrompt] LM Studio returned no choices.")
-        content = choices[0].get("message", {}).get("content") or ""
+            return ""
+        message = choices[0].get("message") or {}
+        content = message.get("content") or ""
         if isinstance(content, list):
-            # Some APIs return content parts
             parts = []
-            for p in content:
-                if isinstance(p, dict) and p.get("type") == "text":
-                    parts.append(p.get("text") or "")
-                elif isinstance(p, str):
-                    parts.append(p)
+            for part in content:
+                if isinstance(part, dict) and part.get("type") == "text":
+                    parts.append(part.get("text") or "")
+                elif isinstance(part, str):
+                    parts.append(part)
             content = "".join(parts)
         return (content or "").strip()
+
+    def _generate_via_lm_studio_v1(
+        self,
+        system_prompt: str,
+        user_text: str,
+        image_url: str | None,
+        model_name: str,
+        temperature: float,
+        max_tokens: int,
+    ) -> str:
+        body = {
+            "model": model_name,
+            "input": self._lm_studio_build_v1_input(user_text, image_url),
+            "temperature": temperature,
+            "top_p": 0.9,
+            "max_output_tokens": max_tokens,
+            "store": False,
+            "stream": False,
+        }
+        if system_prompt.strip():
+            body["system_prompt"] = system_prompt
+        out = self._lm_studio_post("/api/v1/chat", body)
+        content = self._lm_studio_parse_v1_response(out)
+        if not content:
+            raise RuntimeError("[LazyPrompt] LM Studio v1 API returned no message output.")
+        return content
+
+    def _generate_via_lm_studio_openai(
+        self,
+        messages,
+        model_name: str,
+        temperature: float,
+        max_tokens: int,
+        stop: list,
+        ttl_seconds: int = 0,
+    ) -> str:
+        body = {
+            "model": model_name,
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "stop": stop,
+            "top_p": 0.9,
+            "stream": False,
+        }
+        if ttl_seconds and ttl_seconds > 0:
+            body["ttl"] = int(ttl_seconds)
+        out = self._lm_studio_post("/v1/chat/completions", body)
+        content = self._lm_studio_parse_openai_response(out)
+        if not content:
+            raise RuntimeError("[LazyPrompt] LM Studio OpenAI-compatible API returned no choices.")
+        return content
+
+    def _generate_via_lm_studio(
+        self,
+        messages,
+        model_name: str,
+        temperature: float,
+        max_tokens: int,
+        stop: list,
+        ttl_seconds: int = 0,
+    ) -> str:
+        """Call LM Studio native v1 REST API, with OpenAI-compatible fallback."""
+        system_prompt, user_text, image_url = self._lm_studio_messages_to_parts(messages)
+
+        try:
+            result = self._generate_via_lm_studio_v1(
+                system_prompt=system_prompt,
+                user_text=user_text,
+                image_url=image_url,
+                model_name=model_name,
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
+            print("[LazyPrompt] LM Studio native v1 REST API (/api/v1/chat).")
+            return result
+        except urllib.error.HTTPError as e:
+            if e.code not in (404, 405, 501):
+                err_body = ""
+                try:
+                    err_body = e.read().decode("utf-8", errors="replace")
+                except Exception:
+                    pass
+                raise RuntimeError(
+                    f"[LazyPrompt] LM Studio v1 API error ({e.code}): {err_body or e.reason}. "
+                    f"Is LM Studio running with the model loaded? Check the model name matches exactly."
+                ) from e
+            print(
+                "[LazyPrompt] LM Studio v1 REST API unavailable; "
+                "falling back to OpenAI-compatible /v1/chat/completions."
+            )
+        except urllib.error.URLError as e:
+            raise RuntimeError(
+                f"[LazyPrompt] LM Studio API error: {e}. Is LM Studio running on localhost:1234 "
+                f"with the model loaded? Check the model name matches exactly."
+            ) from e
+
+        try:
+            result = self._generate_via_lm_studio_openai(
+                messages=messages,
+                model_name=model_name,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                stop=stop,
+                ttl_seconds=ttl_seconds,
+            )
+            print("[LazyPrompt] LM Studio OpenAI-compatible API (/v1/chat/completions).")
+            return result
+        except urllib.error.HTTPError as e:
+            err_body = ""
+            try:
+                err_body = e.read().decode("utf-8", errors="replace")
+            except Exception:
+                pass
+            raise RuntimeError(
+                f"[LazyPrompt] LM Studio API error ({e.code}): {err_body or e.reason}. "
+                f"Is LM Studio running with the model loaded? Check the model name matches exactly."
+            ) from e
+        except urllib.error.URLError as e:
+            raise RuntimeError(
+                f"[LazyPrompt] LM Studio API error: {e}. Is LM Studio running on localhost:1234 "
+                f"with the model loaded? Check the model name matches exactly."
+            ) from e
 
     def generate(
         self,

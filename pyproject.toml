@@ -1,7 +1,7 @@
 [project]
 name = "Vsaan212-workflow-utilities"  # Node ID (immutable once published)
-version = "1.8.0"
-description = "Subject & Scenario Selectors, Lazy Subject + Scene Automation (dual scenario, live editors, prompt override), Text Split, Optional Switch LoRA, Lazy Prompt Saver, and LazyPrompt for ComfyUI."
+version = "1.9.0"
+description = "Subject & Scenario Selectors, Lazy Subject + Scene Automation, Lazy Image Loader, Text Split, Optional Switch LoRA, Lazy Prompt Saver, and LazyPrompt for ComfyUI."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { file = "LICENSE" }

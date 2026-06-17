@@ -14,6 +14,7 @@ Detailed workflow and file-format guides live under **`docs/nodes/`**. End-to-en
 | [nodes/text-split.md](nodes/text-split.md) | Text Split |
 | [nodes/optional-switch-lora.md](nodes/optional-switch-lora.md) | Optional Switch LoRA |
 | [nodes/lazy-prompt-saver.md](nodes/lazy-prompt-saver.md) | Lazy Prompt Saver |
+| [nodes/lazy-image-loader.md](nodes/lazy-image-loader.md) | Lazy Image Loader |
 | [nodes/lazyprompt.md](nodes/lazyprompt.md) | LazyPrompt (Prompt Engineer, Vision Describe, Unload) |
 | [nodes/lazyprompt-prompt-enhancement.md](nodes/lazyprompt-prompt-enhancement.md) | LazyPrompt: enhancement pipeline and system prompt override |
 
