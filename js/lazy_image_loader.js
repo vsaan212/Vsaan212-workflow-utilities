@@ -52,7 +52,8 @@ function hideWidgetRow(w) {
     } catch (_) {}
 }
 
-function computeCropBox(srcW, srcH, targetRatio, offsetX, offsetY) {
+function computeCropBox(srcW, srcH, targetRatio, offsetX, offsetY, zoom = 1) {
+    const z = Math.max(1, Number(zoom) || 1);
     const srcRatio = srcW / srcH;
     let cropW;
     let cropH;
@@ -63,6 +64,8 @@ function computeCropBox(srcW, srcH, targetRatio, offsetX, offsetY) {
         cropW = srcW;
         cropH = Math.max(1, Math.round(srcW / targetRatio));
     }
+    cropW = Math.max(1, Math.round(cropW / z));
+    cropH = Math.max(1, Math.round(cropH / z));
     const maxOx = Math.max(0, srcW - cropW) / 2;
     const maxOy = Math.max(0, srcH - cropH) / 2;
     const ox = clamp(offsetX, -1, 1);
@@ -119,10 +122,12 @@ function buildUi(node) {
     const autoCropW = widget(node, "auto_crop");
     const offsetXW = widget(node, "offset_x");
     const offsetYW = widget(node, "offset_y");
+    const zoomW = widget(node, "zoom");
     if (!imageW || !aspectW || !autoCropW) return;
 
     hideWidgetRow(offsetXW);
     hideWidgetRow(offsetYW);
+    hideWidgetRow(zoomW);
 
     const root = document.createElement("div");
     root.className = "vsaan-lazy-image-loader";
@@ -154,7 +159,31 @@ function buildUi(node) {
 
     const hint = document.createElement("div");
     hint.style.cssText = "opacity:0.72;line-height:1.35;";
-    hint.textContent = "Drop an image here, or drag inside the preview to reposition.";
+    hint.textContent = "Drag the preview to pan. Zoom in to trim dead space, then pan to frame.";
+
+    const controls = document.createElement("div");
+    controls.style.cssText = "display:flex;flex-direction:column;gap:4px;";
+
+    const zoomRow = document.createElement("div");
+    zoomRow.style.cssText = "display:flex;align-items:center;gap:8px;";
+    const zoomLabel = document.createElement("span");
+    zoomLabel.textContent = "Zoom";
+    zoomLabel.style.minWidth = "36px";
+    const zoomRange = document.createElement("input");
+    zoomRange.type = "range";
+    zoomRange.min = "1";
+    zoomRange.max = "4";
+    zoomRange.step = "0.05";
+    zoomRange.value = String(zoomW?.value ?? 1);
+    zoomRange.style.flex = "1";
+    const zoomValue = document.createElement("span");
+    zoomValue.style.minWidth = "40px";
+    zoomValue.style.textAlign = "right";
+    zoomRow.append(zoomLabel, zoomRange, zoomValue);
+
+    const panReadout = document.createElement("div");
+    panReadout.style.cssText = "opacity:0.75;font-size:11px;font-variant-numeric:tabular-nums;";
+    controls.append(zoomRow, panReadout);
 
     const frame = document.createElement("div");
     frame.style.cssText =
@@ -177,7 +206,22 @@ function buildUi(node) {
     fileInput.type = "file";
     fileInput.accept = "image/*";
     fileInput.style.display = "none";
-    root.append(toolbar, hint, frame, status, fileInput);
+    root.append(toolbar, hint, frame, controls, status, fileInput);
+
+    function currentZoom() {
+        return Math.max(1, Number(zoomW?.value) || 1);
+    }
+
+    function syncPanReadout() {
+        const ox = Number(offsetXW?.value) || 0;
+        const oy = Number(offsetYW?.value) || 0;
+        const z = currentZoom();
+        panReadout.textContent = `Pan X ${ox.toFixed(2)} · Y ${oy.toFixed(2)} · Zoom ${z.toFixed(2)}×`;
+        zoomValue.textContent = `${z.toFixed(2)}×`;
+        if (Math.abs(Number(zoomRange.value) - z) > 0.001) {
+            zoomRange.value = String(z);
+        }
+    }
 
     const state = {
         img: null,
@@ -233,7 +277,14 @@ function buildUi(node) {
 
         const ox = Number(offsetXW?.value) || 0;
         const oy = Number(offsetYW?.value) || 0;
-        const box = computeCropBox(state.img.width, state.img.height, ratio, ox, oy);
+        const box = computeCropBox(
+            state.img.width,
+            state.img.height,
+            ratio,
+            ox,
+            oy,
+            currentZoom(),
+        );
         ctx.drawImage(
             state.img,
             box.left,
@@ -245,6 +296,7 @@ function buildUi(node) {
             canvas.width,
             canvas.height,
         );
+        syncPanReadout();
     }
 
     async function refreshImageList(selectName) {
@@ -288,6 +340,7 @@ function buildUi(node) {
             await refreshImageList(name);
             setWidgetValue(node, "offset_x", 0);
             setWidgetValue(node, "offset_y", 0);
+            setWidgetValue(node, "zoom", 1);
             await loadPreview(name);
         } catch (err) {
             status.textContent = String(err?.message || err);
@@ -314,9 +367,16 @@ function buildUi(node) {
     resetBtn.onclick = () => {
         setWidgetValue(node, "offset_x", 0);
         setWidgetValue(node, "offset_y", 0);
+        setWidgetValue(node, "zoom", 1);
         drawPreview();
         node.setDirtyCanvas?.(true, true);
     };
+
+    zoomRange.addEventListener("input", () => {
+        setWidgetValue(node, "zoom", Number(zoomRange.value));
+        drawPreview();
+        node.setDirtyCanvas?.(true, true);
+    });
 
     canvas.addEventListener("pointerdown", (e) => {
         if (!canPan()) return;
@@ -338,7 +398,14 @@ function buildUi(node) {
         const ratio = targetRatio();
         const ox = Number(offsetXW.value) || 0;
         const oy = Number(offsetYW.value) || 0;
-        const box = computeCropBox(state.img.width, state.img.height, ratio, ox, oy);
+        const box = computeCropBox(
+            state.img.width,
+            state.img.height,
+            ratio,
+            ox,
+            oy,
+            currentZoom(),
+        );
 
         let nextX = ox;
         let nextY = oy;
@@ -383,6 +450,7 @@ function buildUi(node) {
     const onImageChange = () => {
         setWidgetValue(node, "offset_x", 0);
         setWidgetValue(node, "offset_y", 0);
+        setWidgetValue(node, "zoom", 1);
         loadPreview(imageW.value);
     };
 
@@ -426,10 +494,10 @@ app.registerExtension({
             const node = this;
             const uiRoot = buildUi(node);
             node.addDOMWidget("lazy_image_preview", "preview", uiRoot, {
-                getMinHeight: () => 430,
-                getMaxHeight: () => 520,
+                getMinHeight: () => 460,
+                getMaxHeight: () => 560,
             });
-            node.setSize?.([Math.max(node.size?.[0] ?? 0, 300), Math.max(node.size?.[1] ?? 0, 520)]);
+            node.setSize?.([Math.max(node.size?.[0] ?? 0, 300), Math.max(node.size?.[1] ?? 0, 560)]);
             return r;
         };
     },

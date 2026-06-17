@@ -69,8 +69,14 @@ def compute_crop_box(
     target_ratio: float,
     offset_x: float = 0.0,
     offset_y: float = 0.0,
+    zoom: float = 1.0,
 ) -> tuple[int, int, int, int]:
-    """Cover-crop box: (left, top, width, height). offset_* in [-1, 1], 0 = centered."""
+    """Cover-crop box: (left, top, width, height).
+
+    offset_* in [-1, 1], 0 = centered pan within available range.
+    zoom >= 1 shrinks the crop window (zoom in) from the cover-crop baseline.
+    """
+    zoom = max(1.0, float(zoom))
     src_ratio = src_w / float(src_h)
 
     if src_ratio > target_ratio:
@@ -79,6 +85,9 @@ def compute_crop_box(
     else:
         crop_w = src_w
         crop_h = max(1, int(round(src_w / target_ratio)))
+
+    crop_w = max(1, int(round(crop_w / zoom)))
+    crop_h = max(1, int(round(crop_h / zoom)))
 
     max_ox = max(0, src_w - crop_w) / 2.0
     max_oy = max(0, src_h - crop_h) / 2.0
@@ -137,6 +146,16 @@ class LazyImageLoader:
                         "display": "slider",
                     },
                 ),
+                "zoom": (
+                    "FLOAT",
+                    {
+                        "default": 1.0,
+                        "min": 1.0,
+                        "max": 4.0,
+                        "step": 0.05,
+                        "display": "slider",
+                    },
+                ),
             }
         }
 
@@ -146,8 +165,8 @@ class LazyImageLoader:
     CATEGORY = "vsaan212/lazy"
 
     @classmethod
-    def IS_CHANGED(cls, image, aspect_ratio, auto_crop, offset_x, offset_y):
-        return f"{image}|{aspect_ratio}|{auto_crop}|{offset_x:.4f}|{offset_y:.4f}"
+    def IS_CHANGED(cls, image, aspect_ratio, auto_crop, offset_x, offset_y, zoom):
+        return f"{image}|{aspect_ratio}|{auto_crop}|{offset_x:.4f}|{offset_y:.4f}|{zoom:.4f}"
 
     @classmethod
     def VALIDATE_INPUTS(cls, image):
@@ -164,6 +183,7 @@ class LazyImageLoader:
         auto_crop: bool,
         offset_x: float,
         offset_y: float,
+        zoom: float,
     ):
         pil = load_pil_image(image)
         target_ratio = ASPECT_RATIOS.get(aspect_ratio)
@@ -175,6 +195,7 @@ class LazyImageLoader:
                 target_ratio,
                 offset_x,
                 offset_y,
+                zoom,
             )
             pil = pil.crop((left, top, left + crop_w, top + crop_h))
 
