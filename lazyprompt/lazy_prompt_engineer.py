@@ -221,7 +221,7 @@ class LazyPromptEngineer:
                     "max": 3600,
                     "step": 1,
                     "display": "number",
-                    "tooltip": "LM Studio OpenAI fallback only: idle seconds before JIT-loaded model unloads (JSON ttl). 0 = omit. Ignored on native /api/v1/chat.",
+                    "tooltip": "LM Studio JIT unload: when > 0, unloads the model immediately after each run via /api/v1/models/unload (v1 chat). On OpenAI fallback only, also sends idle TTL in the request body. 0 = leave loaded.",
                 }),
                 "max_output_tokens": ("INT", {
                     "default": 900,
@@ -706,6 +706,33 @@ class LazyPromptEngineer:
             content = "".join(parts)
         return (content or "").strip()
 
+    @classmethod
+    def _lm_studio_try_unload(cls, instance_id: str) -> None:
+        """Unload a JIT-loaded model via LM Studio v1 REST API (best-effort)."""
+        if not instance_id:
+            return
+        try:
+            cls._lm_studio_post("/api/v1/models/unload", {"instance_id": instance_id})
+            print(f"[LazyPrompt] LM Studio JIT model unloaded: {instance_id}")
+        except urllib.error.HTTPError as e:
+            if e.code in (404, 405, 501):
+                print(
+                    f"[LazyPrompt] LM Studio unload API unavailable ({e.code}); "
+                    "model may remain loaded until manually unloaded."
+                )
+            else:
+                err_body = ""
+                try:
+                    err_body = e.read().decode("utf-8", errors="replace")
+                except Exception:
+                    pass
+                print(
+                    f"[LazyPrompt] LM Studio unload failed ({e.code}): "
+                    f"{err_body or e.reason}"
+                )
+        except Exception as e:
+            print(f"[LazyPrompt] LM Studio unload failed: {e}")
+
     def _generate_via_lm_studio_v1(
         self,
         system_prompt: str,
@@ -714,7 +741,7 @@ class LazyPromptEngineer:
         model_name: str,
         temperature: float,
         max_tokens: int,
-    ) -> str:
+    ) -> tuple[str, str | None]:
         body = {
             "model": model_name,
             "input": self._lm_studio_build_v1_input(user_text, image_url),
@@ -730,7 +757,8 @@ class LazyPromptEngineer:
         content = self._lm_studio_parse_v1_response(out)
         if not content:
             raise RuntimeError("[LazyPrompt] LM Studio v1 API returned no message output.")
-        return content
+        instance_id = out.get("model_instance_id") or model_name
+        return content, instance_id
 
     def _generate_via_lm_studio_openai(
         self,
@@ -769,9 +797,10 @@ class LazyPromptEngineer:
     ) -> str:
         """Call LM Studio native v1 REST API, with OpenAI-compatible fallback."""
         system_prompt, user_text, image_url = self._lm_studio_messages_to_parts(messages)
+        unload_instance_id = None
 
         try:
-            result = self._generate_via_lm_studio_v1(
+            result, unload_instance_id = self._generate_via_lm_studio_v1(
                 system_prompt=system_prompt,
                 user_text=user_text,
                 image_url=image_url,
@@ -780,6 +809,8 @@ class LazyPromptEngineer:
                 max_tokens=max_tokens,
             )
             print("[LazyPrompt] LM Studio native v1 REST API (/api/v1/chat).")
+            if ttl_seconds and ttl_seconds > 0:
+                self._lm_studio_try_unload(unload_instance_id)
             return result
         except urllib.error.HTTPError as e:
             if e.code not in (404, 405, 501):
@@ -812,6 +843,8 @@ class LazyPromptEngineer:
                 ttl_seconds=ttl_seconds,
             )
             print("[LazyPrompt] LM Studio OpenAI-compatible API (/v1/chat/completions).")
+            if ttl_seconds and ttl_seconds > 0:
+                self._lm_studio_try_unload(model_name)
             return result
         except urllib.error.HTTPError as e:
             err_body = ""
@@ -894,8 +927,11 @@ class LazyPromptEngineer:
         screen_use = bool(screenplay_mode and "LTX" in target_model)
         fps_f = float(fps) if int(fps) > 0 else default_fps_for_target(target_model)
 
-        # None target + non-empty system override → system comes only from override; user message has no aug/tail
-        minimal_llm = is_none_target(target_model) and (system_prompt or "").strip()
+        # None target + system_prompt override and/or scenario prompt_override_input:
+        # send only the user/override text to the LLM (no aug block, no user_tail injections).
+        minimal_llm = is_none_target(target_model) and (
+            bool((system_prompt or "").strip()) or bool(override_text)
+        )
 
         max_tokens_actual = max(96, min(int(max_output_tokens), _ABS_MAX_OUTPUT_TOKENS))
         reply_target = max(32, max_tokens_actual // 3)
@@ -1179,9 +1215,14 @@ class LazyPromptEngineer:
             effective_input = effective_user
 
         if minimal_llm:
+            parts = []
+            if (system_prompt or "").strip():
+                parts.append("system_prompt")
+            if override_text:
+                parts.append("prompt_override_input")
             print(
-                "[LazyPrompt] Minimal mode (None target + system override): "
-                "system prompt from override only; user message is scene + idea only (no augmentation tail)."
+                f"[LazyPrompt] Minimal mode (None target + {' + '.join(parts)}): "
+                "no augmentation block or user_tail injections."
             )
         else:
             has_visual_context = bool(scene_context and scene_context.strip()) or (

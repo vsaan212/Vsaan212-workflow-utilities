@@ -15,7 +15,7 @@ Each run (when **`bypass`** is off) builds an OpenAI-style chat payload:
 1. **System message** — either your **`system_prompt`** text (if non-empty after trim) or the **JSON template** chosen from **`target_model`** (and **`screenplay_mode`** for LTX). The **`None`** target loads no template (empty system unless you use override).
 2. **User message** — your scene/instruction text plus every **dynamic enhancement** appended at the end (pacing, content tier, dialogue rules, LoRA order, environment block, etc.).
 
-When **[minimal mode](#minimal-mode)** applies (`None` target **and** **`system_prompt`** filled), the **user** message is scene + idea only (no augmentation tail). **Otherwise**, the LLM receives the full composed **user** string with enhancements (unless **`bypass`** is on — then no LLM runs; see [Bypass](#bypass-mode)).
+When **[minimal mode](#minimal-mode)** applies (`None` target **and** **`system_prompt`** or **`prompt_override_input`** filled), the **user** message is override/idea only (no augmentation tail). **Otherwise**, the LLM receives the full composed **user** string with enhancements (unless **`bypass`** is on — then no LLM runs; see [Bypass](#bypass-mode)).
 
 ```mermaid
 flowchart TD
@@ -88,12 +88,12 @@ Those templates define output shape (e.g. Wan 80–120 words, SDXL `POSITIVE:` /
 
 ### Minimal mode
 
-When **`target_model`** is **`None`** **and** **`system_prompt`** has text:
+When **`target_model`** is **`None`** **and** either **`system_prompt`** or **`prompt_override_input`** has text:
 
-- **System message** = only that override text (same as other overrides).
-- **User message** = scene + **`user_input`** only (including the Vision Describe wrapper if **`scene_context`** is wired). **No** `---` augmentation block, **no** pacing/tier/dialogue/LoRA tail — only what you typed for the idea (and optional scene context).
+- **System message** — `system_prompt` if set, otherwise empty.
+- **User message** — scenario override or **`user_input`** only (including the Vision Describe wrapper if **`scene_context`** is wired). **No** `---` augmentation block, **no** pacing/tier/dialogue/LoRA tail.
 
-When **`target_model`** is **`None`** **and** **`system_prompt`** is empty: system message is empty and the **full** augmentation path runs (environment, pacing, tiers, etc.), same as any other target with an empty override.
+When **`target_model`** is **`None`** and both **`system_prompt`** and **`prompt_override_input`** are empty: the **full** augmentation path runs (environment, pacing, tiers, etc.).
 
 ---
 

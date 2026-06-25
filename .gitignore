@@ -39,6 +39,7 @@ ENV/
 Thumbs.db
 
 # Project specific
+tests/
 *.log
 lazy_prompts.json
 .pytest_cache/
