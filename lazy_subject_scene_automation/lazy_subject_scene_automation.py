@@ -8,8 +8,8 @@ in both subject and scenario files; older SubjectLora* / ScenarioLora* tags rema
 from __future__ import annotations
 
 import os
-import random
 import re
+import secrets
 from typing import Any, Dict, List, Optional, Tuple
 
 from comfy import model_management
@@ -31,6 +31,9 @@ def _expand_random_brace_choices(text: str) -> str:
     """
     Expand {a|b|c} to one random alternative (innermost groups first).
     Used in scenario description, Prompt, and keyword bodies at queue time.
+
+    Uses secrets (not the global random module) so picks vary per queue run even
+    when ComfyUI seeds random from the workflow seed.
     """
     if not text or "{" not in text:
         return text
@@ -40,8 +43,9 @@ def _expand_random_brace_choices(text: str) -> str:
         m = pattern.search(out)
         if not m:
             break
-        options = m.group(1).split("|")
-        choice = random.choice(options) if options else ""
+        options = [o.strip() for o in m.group(1).split("|")]
+        options = [o for o in options if o != ""]
+        choice = secrets.choice(options) if options else ""
         out = out[: m.start()] + choice + out[m.end() :]
     return out
 
@@ -175,15 +179,29 @@ def _apply_scenario2_strength_overrides(
     return text
 
 
+def _text_might_have_random_groups(text: str) -> bool:
+    """True when text contains at least one {a|b} style random group."""
+    if not text or "{" not in text or "|" not in text:
+        return False
+    return bool(re.search(r"\{[^{}]*\|[^{}]*\}", text))
+
+
 def _resolve_live_or_disk(
     rel_no_ext: str,
     live: Optional[str],
     root: str,
     use_live: bool = False,
 ) -> Tuple[str, Optional[str]]:
-    """Use live editor when use_live is set; otherwise read from disk."""
-    if use_live and live is not None:
-        return str(live), None
+    """
+    Prefer synced live editor text when use_live is set or the live buffer is non-empty.
+    Otherwise read from disk for the selected relative path.
+    """
+    rel = _normalize_rel_no_ext(rel_no_ext)
+    if not rel or rel == "none":
+        return "", None
+    live_text = str(live) if live is not None else ""
+    if use_live or live_text.strip():
+        return live_text, None
     return _read_txt_under_root(root, rel_no_ext)
 
 
@@ -783,10 +801,24 @@ class LazySubjectSceneAutomation:
             scen_choices = ["none"]
         return {
             "required": {
-                "model_high": ("MODEL",),
-                "model_low": ("MODEL",),
-                "clip_high": ("CLIP",),
-                "clip_low": ("CLIP",),
+                "model_high": (
+                    "MODEL",
+                    {
+                        "tooltip": (
+                            "Primary model branch (required). For dual-stack Wan workflows, "
+                            "also wire model_low; for single-model graphs (e.g. Z-Image), leave low unwired."
+                        ),
+                    },
+                ),
+                "clip_high": (
+                    "CLIP",
+                    {
+                        "tooltip": (
+                            "Primary CLIP branch (required). Pair with model_high; "
+                            "wire clip_low only for dual high/low stacks."
+                        ),
+                    },
+                ),
                 "subject": (subj_choices,),
                 "scenario": (scen_choices,),
                 "scenario_2": (
@@ -838,6 +870,24 @@ class LazySubjectSceneAutomation:
                 ),
             },
             "optional": {
+                "model_low": (
+                    "MODEL",
+                    {
+                        "tooltip": (
+                            "Optional low-noise model branch for Wan-style dual stacks. "
+                            "Leave unwired for single-model workflows."
+                        ),
+                    },
+                ),
+                "clip_low": (
+                    "CLIP",
+                    {
+                        "tooltip": (
+                            "Optional low-noise CLIP branch. Wire with model_low for dual stacks; "
+                            "omit for single-model graphs."
+                        ),
+                    },
+                ),
                 "prepend_text": (
                     "STRING",
                     {
@@ -919,18 +969,68 @@ class LazySubjectSceneAutomation:
     FUNCTION = "run"
     CATEGORY = "vsaan212/automation"
 
+    @classmethod
+    def IS_CHANGED(
+        cls,
+        scenario: str = "none",
+        scenario_2: str = "none",
+        scenario_live: Optional[str] = None,
+        scenario_2_live: Optional[str] = None,
+        scenario_use_live: bool = False,
+        scenario_2_use_live: bool = False,
+        **kwargs: Any,
+    ):
+        """
+        Bust ComfyUI output cache when scenario text contains {a|b|c} groups so
+        each queue run re-rolls random choices. Otherwise fingerprint inputs for caching.
+        """
+        cls.refresh_scenarios_list()
+        fingerprint: List[str] = []
+
+        for rel, live, use_live in (
+            (scenario, scenario_live, scenario_use_live),
+            (scenario_2, scenario_2_live, scenario_2_use_live),
+        ):
+            rel_norm = _normalize_rel_no_ext(rel)
+            if not rel_norm or rel_norm == "none":
+                continue
+            text, _ = _resolve_live_or_disk(
+                rel_norm, live, cls.scenarios_root, bool(use_live)
+            )
+            if _text_might_have_random_groups(text):
+                return secrets.token_hex(16)
+            fingerprint.append(f"{rel_norm}:{text}")
+
+        stable = [
+            str(kwargs.get("subject") or ""),
+            str(kwargs.get("scenario") or ""),
+            str(kwargs.get("scenario_2") or ""),
+            str(kwargs.get("subject_live") or ""),
+            str(kwargs.get("scenario_live") or ""),
+            str(kwargs.get("scenario_2_live") or ""),
+            str(kwargs.get("subject_use_live") or ""),
+            str(kwargs.get("scenario_use_live") or ""),
+            str(kwargs.get("scenario_2_use_live") or ""),
+            str(kwargs.get("prepend_text") or ""),
+            str(kwargs.get("post_text") or ""),
+            str(kwargs.get("pass_subject_to_main_prompt") or ""),
+            str(kwargs.get("scenario_2_high_strength") or ""),
+            str(kwargs.get("scenario_2_low_strength") or ""),
+        ]
+        return "|".join(fingerprint + stable)
+
     def run(
         self,
         model_high,
-        model_low,
         clip_high,
-        clip_low,
         subject: str,
         scenario: str,
         scenario_2: str = "none",
         scenario_2_high_strength: float = 1.0,
         scenario_2_low_strength: float = 1.0,
         pass_subject_to_main_prompt: bool = True,
+        model_low=None,
+        clip_low=None,
         post_text: Optional[str] = None,
         prepend_text: Optional[str] = None,
         subject_live: Optional[str] = None,
@@ -982,7 +1082,10 @@ class LazySubjectSceneAutomation:
         lo = _merge_stacks(sl, cl, cl2)
 
         model_h, clip_h = _apply_stack(model_high, clip_high, hi)
-        model_l, clip_l = _apply_stack(model_low, clip_low, lo)
+        if model_low is not None and clip_low is not None:
+            model_l, clip_l = _apply_stack(model_low, clip_low, lo)
+        else:
+            model_l, clip_l = None, None
 
         subject_description = (sdesc or "").strip()
         subj_for_main = sdesc if pass_subject_to_main_prompt else ""

@@ -4,7 +4,9 @@
 
 For an end-to-end workflow narrative (how the node, Python module, HTTP routes, and `lazy_subject_scene_live.js` fit together), see **[lazy-subject-scene-automation-workflow.md](../workflows/lazy-subject-scene-automation-workflow.md)**.
 
-Combines optional-switch LoRA behavior, subject/scenario file selection, and formatted prompt output for **dual high/low** Wan-style workflows (and similar two-branch model graphs).
+Combines optional-switch LoRA behavior, subject/scenario file selection, and formatted prompt output for **dual high/low** Wan-style workflows **or single-model** graphs (**Z-Image**, **Krea2**, Flux, SDXL, etc.) when only **`model_high`** / **`clip_high`** are wired.
+
+**Recent (v1.9.3):** **`model_low`** / **`clip_low`** optional (single-model workflows); **`{a|b|c}`** random picks use `secrets` and **`IS_CHANGED`** cache busting so choices vary every queue; live pane sync on queue via **`beforeQueuePrompt`**; non-empty live buffers preferred over disk on run.
 
 **Recent (v1.8.0):** scenario **`[Prompt]`** → **`prompt_override`** output (LazyPrompt **`prompt_override_input`**), **`{a|b|c}`** random choices in scenario text, multiline **`[Prompt]`** bodies (bracket lines no longer truncate), README workflow screenshot + wiring guide.
 
@@ -23,14 +25,14 @@ When the node refreshes its subject/scenario lists (on node creation, **`R`**, o
 
 ## Workflow overview
 
-1. Load your checkpoint (or upstream stack) into **two** model branches if your workflow expects separate high/low noise models.
-2. Connect **`model_high`** / **`clip_high`** and **`model_low`** / **`clip_low`** from those branches.
-3. Pick **`subject`**, **`scenario`**, and optionally **`scenario_2`** from the dropdowns (`.txt` paths without extension). Set **`scenario_2`** to `none` when you only need one scenario file.
+1. Load your checkpoint into **`model_high`** / **`clip_high`** (required). For **Wan-style dual stacks**, also wire **`model_low`** / **`clip_low`**. For **single-model** workflows (**Z-Image**, **Krea2**, one Flux/SDXL branch), leave the low branch unwired and use the high outputs downstream — put LoRAs on **High** slots or set **Low** slots to `bypass`.
+2. Pick **`subject`**, **`scenario`**, and optionally **`scenario_2`** from the dropdowns (`.txt` paths without extension). Set **`scenario_2`** to `none` when you only need one scenario file.
 4. Optional: connect **`prepend_text`** / **`post_text`** (STRING sockets only) for framing around the subject description.
 5. Edit **subject / scenario / scenario 2** in the live panes on the node. **Queue uses the pane text**, not necessarily what is on disk. Use **Save edits** to write non-empty panes back to the selected `.txt` files.
 6. When **`scenario_2`** is not `none`, use **`scenario_2_high_strength`** and **`scenario_2_low_strength`** to override model strength on the `[LoraHighA]` / `[LoraLowA]` lines in the scenario 2 live text (sliders initialize from the file on load).
-7. Use **`prompt`** for CLIP / preview / downstream text; use **`model_high`**, **`model_low`**, **`clip_high`**, **`clip_low`** as the conditioned outputs for the rest of the graph.
+7. Use **`prompt`** for CLIP / preview / downstream text; use **`model_high`** / **`clip_high`** (and optional **`model_low`** / **`clip_low`**) as the conditioned outputs for the rest of the graph.
 8. Use **`keywords`** for trigger tags or secondary conditioning if your workflow needs them.
+9. Wire **`subject_description`** → LazyPrompt **`character`** and **`prompt_override`** → **`prompt_override_input`** when using scenario **`[Prompt]`** blocks with the LLM path.
 
 Dropdown lists refresh when the node is created; use ComfyUI **`R`** after adding new `.txt` files. Endpoints: `/vsaan212/lazy-subject-scene/subjects` and `…/scenarios` (see below).
 
@@ -38,10 +40,10 @@ Dropdown lists refresh when the node is created; use ComfyUI **`R`** after addin
 
 | Input | Type | Notes |
 |-------|------|--------|
-| `model_high` | MODEL | High-noise branch; receives subject LoRAs then scenario LoRAs for the **high** stack. |
-| `model_low` | MODEL | Low-noise branch; same for the **low** stack. |
-| `clip_high` | CLIP | Patched alongside `model_high`. |
-| `clip_low` | CLIP | Patched alongside `model_low`. |
+| `model_high` | MODEL | **Required.** Primary model branch; receives merged LoRA stacks for the **high** slots. |
+| `clip_high` | CLIP | **Required.** Patched alongside `model_high`. |
+| `model_low` | MODEL | **Optional.** Low-noise branch for Wan-style dual stacks. Omit for single-model graphs. |
+| `clip_low` | CLIP | **Optional.** Pair with `model_low` for dual stacks; omit for single-model graphs. |
 | `subject` | dropdown | `.txt` under `lazy_subject_scene_automation/SubjectFiles/` (recursive). |
 | `scenario` | dropdown | First scenario `.txt` under `lazy_subject_scene_automation/ScenarioFiles/` (recursive). |
 | `scenario_2` | dropdown | Second scenario `.txt` (same folder and format). Default `none`. Adds up to three more LoRA slots (A/B/C) after scenario 1. |
@@ -215,6 +217,9 @@ Cinematic shot, camera pans {left|right}, {morning|evening} light
 **Behavior:**
 
 - Each `{option1|option2|…}` group picks **one** alternative at **queue time** (new random pick every run).
+- Expansion uses **`secrets`** (not Python’s global `random`) so picks are not locked to the ComfyUI workflow seed.
+- When scenario text contains `{a|b}` groups, **`IS_CHANGED`** busts output cache so ComfyUI re-runs the node each queue (otherwise cached output could repeat the same pick).
+- Options are **trimmed** — multiline groups like `{true|false|1|2}` on separate lines work.
 - Multiple groups in the same line are expanded independently (`{left|right} and {up|down}` → four possible outcomes).
 - Innermost `{…}` groups resolve first, so nested patterns like `{wide|{medium|tight}}` work.
 - LoRA path lines are **not** expanded (only description, Prompt, and keyword text after parsing).
@@ -238,7 +243,8 @@ The extension **`js/lazy_subject_scene_live.js`** (loaded via the pack `WEB_DIRE
 
 ### Queue vs disk
 
-- After you **edit a pane**, that side’s live buffer is used on **queue** (via hidden sync widgets), even if you have not saved to disk.
+- On **queue**, the extension syncs live panes into hidden widgets via **`beforeQueuePrompt`** (and a `queuePrompt` fallback). Any pane with text is marked **live** for that run.
+- After you **edit a pane**, that side’s live buffer is used on **queue**, even if you have not saved to disk. Non-empty synced buffers are also preferred over disk when the pane was loaded but not manually edited.
 - Changing a **dropdown** reloads that pane from disk via **`read_pair`** (unless the workflow already stored live text).
 - **`Save edits`** POSTs only non-empty panes for paths that are not `none`; empty panes are skipped.
 - **`{a|b|c}` random groups** in scenario text are expanded when the graph **runs**, not when live panes reload from disk.

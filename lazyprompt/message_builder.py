@@ -8,12 +8,70 @@ from .environment_presets import ENVIRONMENT_PRESETS
 from .system_prompts import has_audio, is_video_model
 
 
+def _character_preface(character: str, target_model: str) -> str:
+    """Subject/character block prepended to the LLM user message (always, including minimal mode)."""
+    ch = character.strip()
+    if not ch:
+        return ""
+    if is_video_model(target_model):
+        hint = (
+            "use this physical description exactly — anchor identity early in the prompt; "
+            "do not invent or contradict it"
+        )
+    elif "SDXL" in target_model or "Pony" in target_model or "SD 1.5" in target_model:
+        hint = (
+            "convert these descriptors into appropriate tags for the target format; "
+            "do not drop or replace them"
+        )
+    else:
+        hint = (
+            "use this physical description exactly in your prompt; "
+            "do not invent or contradict it"
+        )
+    return f"[SUBJECT / CHARACTER — {hint}]\n{ch}"
+
+
+def compose_user_scene_input(
+    effective_user: str,
+    *,
+    scene_context: str = "",
+    character: str = "",
+    target_model: str = "",
+) -> str:
+    """
+    Build the core user-message body: optional scene_context and character layers,
+    then user direction (scenario override or user_input). Always sent to the LLM,
+    including minimal mode (None target + prompt_override / system_prompt).
+    """
+    user = (effective_user or "").strip()
+    sc = (scene_context or "").strip()
+    ch = (character or "").strip()
+    if not sc and not ch:
+        return user
+
+    layers: list[str] = []
+    if sc:
+        layers.append(
+            "[SCENE CONTEXT FROM IMAGE — use this as the authoritative description "
+            "of the subject and setting; do not invent or contradict it]\n"
+            + sc
+        )
+    if ch:
+        preface = _character_preface(ch, target_model)
+        if preface:
+            layers.append(preface)
+    layers.append(
+        "[USER DIRECTION — apply this as action, style, and mood over the above]\n"
+        + user
+    )
+    return "\n\n".join(layers)
+
+
 def build_prompt_augmentation(
     target_model: str,
     environment: str,
     frame_count: int,
     fps: float,
-    character: str,
     seed: int,
     screenplay_mode: bool,
     has_scene_context: bool,
@@ -115,23 +173,6 @@ def build_prompt_augmentation(
         if is_video_model(target_model):
             parts.append(f"  Sound: {sound}")
         parts.append("")
-
-    if character and character.strip():
-        ch = character.strip()
-        if is_video_model(target_model):
-            parts.append(
-                "CHARACTER (use this exactly — anchor words early in the prompt): "
-                f"{ch}\n"
-            )
-        elif "SDXL" in target_model or "Pony" in target_model or "SD 1.5" in target_model:
-            parts.append(
-                "CHARACTER (convert these descriptors into appropriate tags for the target format): "
-                f"{ch}\n"
-            )
-        else:
-            parts.append(
-                f"CHARACTER (use this physical description exactly in your prompt): {ch}\n"
-            )
 
     if has_audio(target_model):
         parts.append(

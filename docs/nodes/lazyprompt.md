@@ -20,7 +20,7 @@ Three related nodes for LLM-assisted prompting inside ComfyUI.
 
 1. Choose **`target_model`** so the correct JSON system template and pacing rules apply (**`None`** = no default template; optional minimal mode with override — see [lazyprompt-prompt-enhancement.md](lazyprompt-prompt-enhancement.md)). Video vs image token budgets differ.
 2. Set **`model`** to either a **local Hugging Face** Gemma-style LLM (8B/3B paths) or **LM Studio (API)**.
-3. Enter your idea in **`user_input`** (and optional **`character`**, **`lora_triggers`**, **`environment`** preset).
+3. Enter your idea in **`user_input`**. Wire **`character`** ← **`subject_description`** from **Lazy-subject-and-scene-automation** so subject **`[desciption]`** always reaches the LLM (including when **`prompt_override_input`** is set). Optional **`lora_triggers`**, **`environment`** preset.
 4. Optional **`scene_context`** — connect text from **Vision Describe** or any frame/scene description.
 5. Optional **`prompt_override_input`** — when wired/non-empty, **replaces `user_input`** for the LLM request (LM Studio API and local HF). Typical source: **`prompt_override`** from **Lazy-subject-and-scene-automation** when the scenario file uses a **`[Prompt]`** block instead of **`[desciption]`**.
 6. Optional **`image`** — **LM Studio only**, when using a **vision** model in LM Studio: start frame or reference is sent as JPEG in an OpenAI-style chat (same general pattern as ComfyExpo LM Studio nodes). **Ignored** for local 8B/3B Transformers backends; use Vision Describe → `scene_context` instead.

@@ -182,9 +182,19 @@ function syncLiveToWidgets(node) {
     node.setDirtyCanvas?.(true, true);
 }
 
-function syncAllLazyLiveNodes() {
+function syncAllLazyLiveNodesForQueue() {
     for (const node of graphNodes(app.graph)) {
         if (node.comfyClass !== "LazySubjectSceneAutomation") continue;
+        applyScenario2StrengthFromSliders(node, false);
+        if (String(node.__lssSubjectTa?.value ?? "").trim()) {
+            markPaneLive(node, "subject");
+        }
+        if (String(node.__lssScenarioTa?.value ?? "").trim()) {
+            markPaneLive(node, "scenario");
+        }
+        if (String(node.__lssScenario2Ta?.value ?? "").trim()) {
+            markPaneLive(node, "scenario_2");
+        }
         syncLiveToWidgets(node);
     }
 }
@@ -193,14 +203,12 @@ function ensureQueueHook() {
     if (queueHooked) return;
     queueHooked = true;
     const orig = app.queuePrompt;
-    app.queuePrompt = function (...args) {
-        for (const node of graphNodes(app.graph)) {
-            if (node.comfyClass !== "LazySubjectSceneAutomation") continue;
-            applyScenario2StrengthFromSliders(node, false);
-        }
-        syncAllLazyLiveNodes();
-        return orig.apply(this, args);
-    };
+    if (typeof orig === "function") {
+        app.queuePrompt = function (...args) {
+            syncAllLazyLiveNodesForQueue();
+            return orig.apply(this, args);
+        };
+    }
 }
 
 function updateScenario2SlidersFromText(node) {
@@ -528,6 +536,10 @@ function buildLiveDom(node) {
 
 app.registerExtension({
     name: "Vsaan212.LazySubjectSceneLive",
+
+    async beforeQueuePrompt() {
+        syncAllLazyLiveNodesForQueue();
+    },
 
     async beforeRegisterNodeDef(nodeType, nodeData) {
         if (nodeData.name !== "LazySubjectSceneAutomation") return;

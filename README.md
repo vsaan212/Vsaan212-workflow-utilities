@@ -8,7 +8,7 @@ ComfyUI custom nodes: selectors, dual-stack subject/scene automation, text utili
 |------|----------------|------------|
 | **Subject Selector** | Load `.txt` from `subjectselector/SubjectFiles/` (recursive). | [docs/nodes/subject-selector.md](docs/nodes/subject-selector.md) |
 | **Scenario Selector** | Load `.txt` from `scenarioselector/ScenarioFiles/` (recursive). | [docs/nodes/scenario-selector.md](docs/nodes/scenario-selector.md) |
-| **Lazy-subject-and-scene-automation** | One node: **one subject** + **two scenario** files (up to 6 scenario LoRA sets), Wan-style high/low stacks, `prompt` + `keywords`. **Live editors** on the node (queue uses pane text, not disk); **Save edits** to `.txt`; **scenario 2 strength** sliders override `[LoraHighA]` / `[LoraLowA]` model strength. Uses **`lazy_subject_scene_automation/SubjectFiles`** and **`…/ScenarioFiles`**. | [docs/nodes/lazy-subject-scene-automation.md](docs/nodes/lazy-subject-scene-automation.md) |
+| **Lazy-subject-and-scene-automation** | One node: **one subject** + **two scenario** files (up to 6 scenario LoRA sets), **`model_high`** / **`clip_high`** required (single-model **Z-Image**, **Krea2**, Flux, etc.) or full Wan-style **high/low** dual stack when **`model_low`** / **`clip_low`** are wired. **`prompt`**, **`keywords`**, **`subject_description`**, **`prompt_override`**. **Live editors** on the node (queue uses pane text, not disk); **Save edits** to `.txt`; **scenario 2 strength** sliders override `[LoraHighA]` / `[LoraLowA]` model strength. Uses **`lazy_subject_scene_automation/SubjectFiles`** and **`…/ScenarioFiles`**. | [docs/nodes/lazy-subject-scene-automation.md](docs/nodes/lazy-subject-scene-automation.md) |
 | **Text Split** | Split by separator, regex, or **tagged format** (`[Tag]` headers). **Auto-detects** v2 subject/scenario files when the first line is `[LoraHighA]`; otherwise **`tagged_format`** or separator `#` for legacy graphs. | [docs/nodes/text-split.md](docs/nodes/text-split.md) |
 | **Optional Switch LoRA** | Apply a LoRA or pass through when path is `bypass` / empty. | [docs/nodes/optional-switch-lora.md](docs/nodes/optional-switch-lora.md) |
 | **Lazy Prompt Saver** | Save / clone / delete named prompts in `lazy_prompts.json`. | [docs/nodes/lazy-prompt-saver.md](docs/nodes/lazy-prompt-saver.md) |
@@ -74,16 +74,18 @@ Full node reference: [lazy-subject-scene-automation-workflow.md](docs/workflows/
 ### How to wire it
 
 **1. Lazy-subject-and-scene-automation (center)**  
-- Connect **`model_high`** / **`clip_high`** and **`model_low`** / **`clip_low`** from your checkpoint branches (Wan-style dual stack).  
+- Connect **`model_high`** and **`clip_high`** (required). For **single-model** graphs (**Z-Image**, **Krea2**, one Flux/SDXL branch, etc.), leave **`model_low`** / **`clip_low`** unwired and use **`model_high`** / **`clip_high`** outputs downstream. For **Wan-style dual stacks**, also wire **`model_low`** / **`clip_low`** in and out.  
 - Pick **`subject`**, **`scenario`**, and optional **`scenario_2`** from the dropdowns (`.txt` under `lazy_subject_scene_automation/SubjectFiles` and `…/ScenarioFiles`).  
 - Edit the **live** panes on the node; queue uses that text (not necessarily disk). Use **Save edits** to write back to `.txt`.  
 - Optional **`prepend_text`** / **`post_text`**: wire STRING inputs (e.g. **Lazy Prompt Saver** for a saved prefix, **User Text** or any string node for postfix).  
-- Outputs **`model_*`**, **`clip_*`**, **`keywords`**, and **`prompt`** go to the rest of your sampling / CLIP graph.  
-- Output **`prompt_override`**: wire when a scenario file uses a **`[Prompt]`** block (see below).
+- Outputs **`model_high`** / **`clip_high`** (and optional **`model_low`** / **`clip_low`**), **`keywords`**, **`prompt`**, **`subject_description`**, and **`prompt_override`** go to the rest of your graph.  
+- Output **`prompt_override`**: wire when a scenario file uses a **`[Prompt]`** block (see below).  
+- **Single-model LoRA tip:** put LoRAs on **High** slots (`LoraHighA`, …) or set **Low** slots to `bypass` — the low branch is skipped when **`model_low`** / **`clip_low`** are not connected.
 
 **2. LazyPrompt — Prompt Engineer (LLM)**  
 - **`user_input`**: your rough idea (or leave minimal when override carries the scene).  
 - **`prompt_override_input`** ← **`prompt_override`** from the automation node when the scenario file defines **`[Prompt]`** instead of **`[desciption]`**. When connected/non-empty, this **replaces `user_input`** for the LM Studio / local HF request. You can also wire a **Lazy Prompt Saver** here for a fixed override string.  
+- **`character`** ← **`subject_description`** from the automation node so the subject file’s **`[desciption]`** always reaches the LLM (including when **`prompt_override_input`** is set).  
 - **`scene_context`** ← **LazyPrompt — Vision Describe** (or paste text manually).  
 - **`image`**: optional reference frame for **LM Studio (API)** with a vision model loaded.  
 - Set **`target_model`**, **`model`** (e.g. **LM Studio (API)**), **`lm_studio_model`**, and token/temperature as needed.  
@@ -91,7 +93,7 @@ Full node reference: [lazy-subject-scene-automation-workflow.md](docs/workflows/
 
 **3. LazyPrompt — Vision Describe (optional)**  
 - **`image`** ← **Lazy Image Loader** or **Load Image** (or any IMAGE output).  
-- **`scene_context`** → Prompt Engineer **`character`** or **`scene_context`** (graph above uses **`character`**).  
+- **`scene_context`** → Prompt Engineer **`scene_context`** (or use **`character`** for subject-file text from automation).  
 - Run once per reference frame; caption text steers the LLM without inventing the subject from scratch.
 
 **4. Scenario file tips for this graph**  

@@ -25,7 +25,11 @@ import gc
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from .environment_presets import ENVIRONMENT_PRESETS
-from .message_builder import build_prompt_augmentation, split_positive_negative_block
+from .message_builder import (
+    build_prompt_augmentation,
+    compose_user_scene_input,
+    split_positive_negative_block,
+)
 from .system_prompts import (
     JSON_PROMPTS_HINT,
     TARGET_MODEL_DEFAULT,
@@ -263,8 +267,12 @@ class LazyPromptEngineer:
                 "character": ("STRING", {
                     "default": "",
                     "multiline": False,
-                    "placeholder": "Character / LoRA lock description",
-                    "tooltip": "Merged into the request as a hard character lock (natural language or tags per target).",
+                    "placeholder": "Wire subject_description from Lazy-subject-and-scene-automation",
+                    "tooltip": (
+                        "Subject / character description — always prepended to the LLM user message "
+                        "(including minimal mode and when prompt_override_input is set). "
+                        "Wire from Lazy-subject-and-scene-automation subject_description."
+                    ),
                 }),
                 "image": ("IMAGE", {
                     "tooltip": (
@@ -892,10 +900,13 @@ class LazyPromptEngineer:
     ):
         override_text = (prompt_override_input or "").strip()
         effective_user = override_text or (user_input or "").strip()
+        character_text = (character or "").strip()
         if override_text:
             print(
                 "[LazyPrompt] prompt_override_input replaces user_input for this LLM request."
             )
+        if character_text:
+            print("[LazyPrompt] character (subject) prepended to LLM user message.")
 
         # ── Bypass mode — no model loaded, input passed straight through ────────
         if bypass:
@@ -1037,8 +1048,8 @@ class LazyPromptEngineer:
             re.IGNORECASE,
         )
 
-        is_explicit    = bool(_explicit_re.search(effective_user))
-        is_sensual     = bool(_sensual_re.search(effective_user)) and not is_explicit
+        is_explicit    = bool(_explicit_re.search(effective_user + " " + character_text))
+        is_sensual     = bool(_sensual_re.search(effective_user + " " + character_text)) and not is_explicit
 
         # Undressing detection still used inside tier 3 for the mandatory segment rule
         _undress_re = re.compile(
@@ -1049,7 +1060,7 @@ class LazyPromptEngineer:
             r"shed\w*\s+(her|his|their)?\s*(clothes|clothing|shirt|dress))\b",
             re.IGNORECASE,
         )
-        has_undressing = bool(_undress_re.search(effective_user))
+        has_undressing = bool(_undress_re.search(effective_user + " " + character_text))
 
         if is_explicit:
             # ── Tier 3: user asked for explicit content ──────────────────────
@@ -1126,7 +1137,8 @@ class LazyPromptEngineer:
             r"player|nurse|doctor|student|teacher|child|children|kid|kids|crowd|audience)\b",
             re.IGNORECASE,
         )
-        has_person = bool(_person_re.search(effective_user + " " + scene_context))
+        _context_for_detection = effective_user + " " + (scene_context or "") + " " + character_text
+        has_person = bool(_person_re.search(_context_for_detection))
         if not has_person:
             no_person_instruction = (
                 "\n[SCENE INSTRUCTION: The user has not described any person or character. "
@@ -1153,7 +1165,7 @@ class LazyPromptEngineer:
             r"couple|trio|they\s+(kiss|touch|embrace|undress|fuck|have))\b",
             re.IGNORECASE,
         )
-        has_multi_subject = bool(_multi_re.search(effective_user + " " + scene_context))
+        has_multi_subject = bool(_multi_re.search(_context_for_detection))
         if has_multi_subject:
             multi_instruction = (
                 "\n[MULTI-SUBJECT INSTRUCTION: This scene has two or more people. "
@@ -1199,20 +1211,13 @@ class LazyPromptEngineer:
                     "woven in as descriptive prose, not as tags.]"
                 )
 
-        # --- Merge vision context if provided ---
-        # When a scene_context is wired in from the Vision Describe node,
-        # prepend it so the LLM uses it as the authoritative subject/scene
-        # description rather than inventing one from scratch.
-        if scene_context and scene_context.strip():
-            effective_input = (
-                f"[SCENE CONTEXT FROM IMAGE — use this as the authoritative description "
-                f"of the subject and setting; do not invent or contradict it]\n"
-                f"{scene_context.strip()}\n\n"
-                f"[USER DIRECTION — apply this as action, style, and mood over the above scene]\n"
-                f"{effective_user}"
-            )
-        else:
-            effective_input = effective_user
+        # --- Scene / subject / user direction (always in LLM user message) ---
+        effective_input = compose_user_scene_input(
+            effective_user,
+            scene_context=scene_context or "",
+            character=character_text,
+            target_model=target_model,
+        )
 
         if minimal_llm:
             parts = []
@@ -1220,6 +1225,8 @@ class LazyPromptEngineer:
                 parts.append("system_prompt")
             if override_text:
                 parts.append("prompt_override_input")
+            if character_text:
+                parts.append("character")
             print(
                 f"[LazyPrompt] Minimal mode (None target + {' + '.join(parts)}): "
                 "no augmentation block or user_tail injections."
@@ -1233,7 +1240,6 @@ class LazyPromptEngineer:
                 environment=environment,
                 frame_count=frame_count,
                 fps=fps_f,
-                character=(character or "").strip(),
                 seed=env_seed,
                 screenplay_mode=screen_use,
                 has_scene_context=has_visual_context,
