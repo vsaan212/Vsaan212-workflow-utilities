@@ -52,6 +52,31 @@ function hideWidgetRow(w) {
     } catch (_) {}
 }
 
+function showWidgetRow(w) {
+    if (!w) return;
+    if (w.hidden !== undefined) w.hidden = false;
+    try {
+        const el = w.inputEl || w.domEl;
+        let p = el?.parentElement;
+        for (let i = 0; i < 6 && p; i++) {
+            if (p.classList?.contains("comfy-widget") || p.classList?.contains("widget")) {
+                p.style.display = "";
+                break;
+            }
+            p = p.parentElement;
+        }
+    } catch (_) {}
+}
+
+function setMegapixelsVisibility(node) {
+    const resizeW = widget(node, "resize_by_megapixels");
+    const mpW = widget(node, "megapixels");
+    if (!mpW) return;
+    const on = !!resizeW?.value;
+    if (on) showWidgetRow(mpW);
+    else hideWidgetRow(mpW);
+}
+
 function computeCropBox(srcW, srcH, targetRatio, offsetX, offsetY, zoom = 1) {
     const z = Math.max(1, Number(zoom) || 1);
     const srcRatio = srcW / srcH;
@@ -120,14 +145,30 @@ function buildUi(node) {
     const imageW = widget(node, "image");
     const aspectW = widget(node, "aspect_ratio");
     const autoCropW = widget(node, "auto_crop");
+    const resizeMpW = widget(node, "resize_by_megapixels");
+    const megapixelsW = widget(node, "megapixels");
     const offsetXW = widget(node, "offset_x");
     const offsetYW = widget(node, "offset_y");
     const zoomW = widget(node, "zoom");
+    const flipW = widget(node, "flip_horizontal");
     if (!imageW || !aspectW || !autoCropW) return;
 
     hideWidgetRow(offsetXW);
     hideWidgetRow(offsetYW);
     hideWidgetRow(zoomW);
+    hideWidgetRow(flipW);
+    setMegapixelsVisibility(node);
+
+    if (resizeMpW) {
+        const prev = resizeMpW.callback;
+        resizeMpW.callback = function (v) {
+            if (typeof prev === "function") prev.call(this, v);
+            setMegapixelsVisibility(node);
+            node.setDirtyCanvas?.(true, true);
+        };
+    }
+    // Keep megapixels available for compute even when row hidden
+    void megapixelsW;
 
     const root = document.createElement("div");
     root.className = "vsaan-lazy-image-loader";
@@ -139,6 +180,8 @@ function buildUi(node) {
 
     const btnStyle =
         "flex:1;min-width:72px;padding:5px 8px;border-radius:6px;border:1px solid rgba(255,255,255,0.18);background:rgba(255,255,255,0.06);color:inherit;cursor:pointer;";
+    const btnActiveStyle =
+        "flex:1;min-width:72px;padding:5px 8px;border-radius:6px;border:1px solid rgba(140,190,255,0.65);background:rgba(80,140,255,0.28);color:inherit;cursor:pointer;";
 
     const browseBtn = document.createElement("button");
     browseBtn.type = "button";
@@ -150,12 +193,13 @@ function buildUi(node) {
     folderBtn.textContent = "Open input folder";
     folderBtn.style.cssText = btnStyle;
 
-    const resetBtn = document.createElement("button");
-    resetBtn.type = "button";
-    resetBtn.textContent = "Center crop";
-    resetBtn.style.cssText = btnStyle;
+    const flipBtn = document.createElement("button");
+    flipBtn.type = "button";
+    flipBtn.textContent = "Flip horizontal";
+    flipBtn.style.cssText = btnStyle;
+    flipBtn.title = "Mirror the image left ↔ right";
 
-    toolbar.append(browseBtn, folderBtn, resetBtn);
+    toolbar.append(browseBtn, folderBtn, flipBtn);
 
     const hint = document.createElement("div");
     hint.style.cssText = "opacity:0.72;line-height:1.35;";
@@ -212,15 +256,27 @@ function buildUi(node) {
         return Math.max(1, Number(zoomW?.value) || 1);
     }
 
+    function isFlipped() {
+        return !!flipW?.value;
+    }
+
+    function syncFlipButton() {
+        const on = isFlipped();
+        flipBtn.style.cssText = on ? btnActiveStyle : btnStyle;
+        flipBtn.setAttribute("aria-pressed", on ? "true" : "false");
+    }
+
     function syncPanReadout() {
         const ox = Number(offsetXW?.value) || 0;
         const oy = Number(offsetYW?.value) || 0;
         const z = currentZoom();
-        panReadout.textContent = `Pan X ${ox.toFixed(2)} · Y ${oy.toFixed(2)} · Zoom ${z.toFixed(2)}×`;
+        const flipNote = isFlipped() ? " · Flipped" : "";
+        panReadout.textContent = `Pan X ${ox.toFixed(2)} · Y ${oy.toFixed(2)} · Zoom ${z.toFixed(2)}×${flipNote}`;
         zoomValue.textContent = `${z.toFixed(2)}×`;
         if (Math.abs(Number(zoomRange.value) - z) > 0.001) {
             zoomRange.value = String(z);
         }
+        syncFlipButton();
     }
 
     const state = {
@@ -252,6 +308,7 @@ function buildUi(node) {
     function drawPreview() {
         const ctx = canvas.getContext("2d");
         if (!ctx) return;
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
         ctx.clearRect(0, 0, canvas.width, canvas.height);
         ctx.fillStyle = "#111";
         ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -261,7 +318,14 @@ function buildUi(node) {
             ctx.font = "13px sans-serif";
             ctx.textAlign = "center";
             ctx.fillText("No image selected", canvas.width / 2, canvas.height / 2);
+            syncFlipButton();
             return;
+        }
+
+        ctx.save();
+        if (isFlipped()) {
+            ctx.translate(canvas.width, 0);
+            ctx.scale(-1, 1);
         }
 
         const ratio = targetRatio();
@@ -272,6 +336,8 @@ function buildUi(node) {
             const dx = (canvas.width - dw) / 2;
             const dy = (canvas.height - dh) / 2;
             ctx.drawImage(state.img, dx, dy, dw, dh);
+            ctx.restore();
+            syncPanReadout();
             return;
         }
 
@@ -296,6 +362,7 @@ function buildUi(node) {
             canvas.width,
             canvas.height,
         );
+        ctx.restore();
         syncPanReadout();
     }
 
@@ -364,10 +431,8 @@ function buildUi(node) {
         }
     };
 
-    resetBtn.onclick = () => {
-        setWidgetValue(node, "offset_x", 0);
-        setWidgetValue(node, "offset_y", 0);
-        setWidgetValue(node, "zoom", 1);
+    flipBtn.onclick = () => {
+        setWidgetValue(node, "flip_horizontal", !isFlipped());
         drawPreview();
         node.setDirtyCanvas?.(true, true);
     };
@@ -409,7 +474,8 @@ function buildUi(node) {
 
         let nextX = ox;
         let nextY = oy;
-        if (box.maxOx > 0) nextX -= dx / box.maxOx;
+        const flipSign = isFlipped() ? -1 : 1;
+        if (box.maxOx > 0) nextX -= (dx * flipSign) / box.maxOx;
         if (box.maxOy > 0) nextY -= dy / box.maxOy;
         setWidgetValue(node, "offset_x", clamp(nextX, -1, 1));
         setWidgetValue(node, "offset_y", clamp(nextY, -1, 1));

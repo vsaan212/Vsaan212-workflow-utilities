@@ -186,11 +186,47 @@ def _text_might_have_random_groups(text: str) -> bool:
     return bool(re.search(r"\{[^{}]*\|[^{}]*\}", text))
 
 
+def _subject_parent_dir(rel_no_ext: str) -> str:
+    """Parent folder of a subject rel path (no extension); '' for SubjectFiles root."""
+    rel = _normalize_rel_no_ext(rel_no_ext)
+    if not rel or "/" not in rel:
+        return ""
+    return rel.rsplit("/", 1)[0]
+
+
+def _subjects_in_directory(
+    subjects_relpaths: List[str], parent_dir: str
+) -> List[str]:
+    """All subject rel paths whose parent folder matches parent_dir."""
+    parent = _normalize_rel_no_ext(parent_dir)
+    pool: List[str] = []
+    for rel in subjects_relpaths:
+        rel_norm = _normalize_rel_no_ext(rel)
+        if not rel_norm or rel_norm == "none":
+            continue
+        if _subject_parent_dir(rel_norm) == parent:
+            pool.append(rel_norm)
+    return pool
+
+
+def _pick_random_subject_in_directory(
+    subjects_relpaths: List[str], selected: str
+) -> str:
+    rel = _normalize_rel_no_ext(selected)
+    if not rel or rel == "none":
+        return rel
+    pool = _subjects_in_directory(subjects_relpaths, _subject_parent_dir(rel))
+    if not pool:
+        return rel
+    return secrets.choice(pool)
+
+
 def _resolve_live_or_disk(
     rel_no_ext: str,
     live: Optional[str],
     root: str,
     use_live: bool = False,
+    force_disk: bool = False,
 ) -> Tuple[str, Optional[str]]:
     """
     Prefer synced live editor text when use_live is set or the live buffer is non-empty.
@@ -200,7 +236,7 @@ def _resolve_live_or_disk(
     if not rel or rel == "none":
         return "", None
     live_text = str(live) if live is not None else ""
-    if use_live or live_text.strip():
+    if not force_disk and (use_live or live_text.strip()):
         return live_text, None
     return _read_txt_under_root(root, rel_no_ext)
 
@@ -241,6 +277,11 @@ _KNOWN_V2_SECTION_TAGS = frozenset(
         "description",
         "desciption",
         "prompt",
+        "workflow",
+        "referenceimage1",
+        "referenceimage2",
+        "referenceimage3",
+        "audioreference",
         "subjectlorahigh",
         "subjectloralow",
         "scenariolorahigh",
@@ -522,6 +563,82 @@ def _prompt_from_blocks(blocks: Dict[str, Tuple[str, float, float]]) -> str:
     if b:
         return (b[0] or "").strip()
     return ""
+
+
+def _block_body(blocks: Dict[str, Tuple[str, float, float]], tag: str) -> str:
+    b = blocks.get(_norm_tag(tag))
+    if not b:
+        return ""
+    return (b[0] or "").strip()
+
+
+_MINIMAX_SELECTOR_TAGS = (
+    "Workflow",
+    "ReferenceImage1",
+    "ReferenceImage2",
+    "ReferenceImage3",
+    "AudioReference",
+)
+
+_WORKFLOW_NORMALIZE = {
+    "t2v": "T2V",
+    "t2va": "T2V",
+    "i2v": "I2V",
+    "i2va": "I2V",
+    "fl2v": "FL2V",
+    "fl": "FL2V",
+    "fl2va": "FL2V",
+    "flf2v": "FL2V",
+    "r2v": "R2V",
+    "ref2v": "R2V",
+    "ref2va": "R2V",
+}
+
+
+def _normalize_workflow_value(raw: str) -> str:
+    key = re.sub(r"[^a-z0-9]", "", (raw or "").lower())
+    return _WORKFLOW_NORMALIZE.get(key, (raw or "").strip().upper())
+
+
+def _minimax_fields_from_content(content: str) -> Dict[str, str]:
+    """Extract MiniMax selector fields from a v2 tagged subject/scenario body."""
+    content = (content or "").strip().replace("\r\n", "\n").replace("\r", "\n")
+    empty = {t: "" for t in _MINIMAX_SELECTOR_TAGS}
+    if not content or not _is_tagged_format(content):
+        return empty
+    blocks = _parse_tagged_blocks(content)
+    out = {t: _block_body(blocks, t) for t in _MINIMAX_SELECTOR_TAGS}
+    if out["Workflow"]:
+        out["Workflow"] = _normalize_workflow_value(out["Workflow"].splitlines()[0])
+    return out
+
+
+def _merge_minimax_selector_fields(*field_maps: Dict[str, str]) -> Dict[str, str]:
+    """
+    Merge subject → scenario → scenario_2.
+    Workflow / AudioReference: later non-empty wins.
+    ReferenceImage slots: later non-empty slot overrides that slot only.
+    """
+    merged = {t: "" for t in _MINIMAX_SELECTOR_TAGS}
+    for fields in field_maps:
+        if not fields:
+            continue
+        for tag in _MINIMAX_SELECTOR_TAGS:
+            val = (fields.get(tag) or "").strip()
+            if not val:
+                continue
+            merged[tag] = val
+    return merged
+
+
+def _format_minimax_selector(fields: Dict[str, str]) -> str:
+    parts: List[str] = []
+    for tag in _MINIMAX_SELECTOR_TAGS:
+        val = (fields.get(tag) or "").strip()
+        if not val:
+            continue
+        parts.append(f"[{tag}]\n{val}")
+    return "\n".join(parts)
 
 
 def _scenario_description_and_prompt(
@@ -868,6 +985,17 @@ class LazySubjectSceneAutomation:
                         ),
                     },
                 ),
+                "randomize_subject_in_directory": (
+                    "BOOLEAN",
+                    {
+                        "default": False,
+                        "tooltip": (
+                            "ON: each queue picks a random subject .txt from the same folder as the selected subject "
+                            "(SubjectFiles subfolder). Live subject pane is ignored while this is on. "
+                            "OFF: always use the selected subject."
+                        ),
+                    },
+                ),
             },
             "optional": {
                 "model_low": (
@@ -893,7 +1021,10 @@ class LazySubjectSceneAutomation:
                     {
                         "default": "",
                         "forceInput": True,
-                        "tooltip": "Optional: wired prepend for prompt (replaces former on-node multiline).",
+                        "tooltip": (
+                            "Optional: wired prepend for main prompt and for prompt_override "
+                            "(scenario [Prompt] or [description]/[desciption])."
+                        ),
                     },
                 ),
                 "post_text": (
@@ -901,7 +1032,10 @@ class LazySubjectSceneAutomation:
                     {
                         "default": "",
                         "forceInput": True,
-                        "tooltip": "Optional: wired post text after subject block (replaces former on-node multiline).",
+                        "tooltip": (
+                            "Optional: wired post text after the subject block on main prompt, "
+                            "and before scenario [Prompt] body on prompt_override."
+                        ),
                     },
                 ),
                 "subject_live": (
@@ -955,7 +1089,17 @@ class LazySubjectSceneAutomation:
             },
         }
 
-    RETURN_TYPES = ("STRING", "MODEL", "MODEL", "STRING", "CLIP", "CLIP", "STRING", "STRING")
+    RETURN_TYPES = (
+        "STRING",
+        "MODEL",
+        "MODEL",
+        "STRING",
+        "CLIP",
+        "CLIP",
+        "STRING",
+        "STRING",
+        "STRING",
+    )
     RETURN_NAMES = (
         "prompt",
         "model_high",
@@ -965,6 +1109,7 @@ class LazySubjectSceneAutomation:
         "clip_low",
         "subject_description",
         "prompt_override",
+        "selector",
     )
     FUNCTION = "run"
     CATEGORY = "vsaan212/automation"
@@ -984,6 +1129,9 @@ class LazySubjectSceneAutomation:
         Bust ComfyUI output cache when scenario text contains {a|b|c} groups so
         each queue run re-rolls random choices. Otherwise fingerprint inputs for caching.
         """
+        if kwargs.get("randomize_subject_in_directory"):
+            return secrets.token_hex(16)
+
         cls.refresh_scenarios_list()
         fingerprint: List[str] = []
 
@@ -1014,6 +1162,7 @@ class LazySubjectSceneAutomation:
             str(kwargs.get("prepend_text") or ""),
             str(kwargs.get("post_text") or ""),
             str(kwargs.get("pass_subject_to_main_prompt") or ""),
+            str(kwargs.get("randomize_subject_in_directory") or ""),
             str(kwargs.get("scenario_2_high_strength") or ""),
             str(kwargs.get("scenario_2_low_strength") or ""),
         ]
@@ -1029,6 +1178,7 @@ class LazySubjectSceneAutomation:
         scenario_2_high_strength: float = 1.0,
         scenario_2_low_strength: float = 1.0,
         pass_subject_to_main_prompt: bool = True,
+        randomize_subject_in_directory: bool = False,
         model_low=None,
         clip_low=None,
         post_text: Optional[str] = None,
@@ -1050,9 +1200,16 @@ class LazySubjectSceneAutomation:
         rel_scen = (scenario or "").strip().replace("\\", "/").strip("/")
         rel_scen2 = (scenario_2 or "").strip().replace("\\", "/").strip("/")
 
+        if randomize_subject_in_directory and rel_sub and rel_sub != "none":
+            rel_sub = _pick_random_subject_in_directory(self.subjects_relpaths, rel_sub)
+
         preview_err: List[str] = []
         subj_raw, subj_err = _resolve_live_or_disk(
-            rel_sub, subject_live, self.subjects_root, subject_use_live
+            rel_sub,
+            subject_live,
+            self.subjects_root,
+            subject_use_live,
+            force_disk=randomize_subject_in_directory,
         )
         scen_raw, scen_err = _resolve_live_or_disk(
             rel_scen, scenario_live, self.scenarios_root, scenario_use_live
@@ -1091,8 +1248,22 @@ class LazySubjectSceneAutomation:
         subj_for_main = sdesc if pass_subject_to_main_prompt else ""
         scen_desc = _combine_scenario_descriptions(cdesc, cdesc2)
         prompt_override = _combine_scenario_descriptions(cprompt, cprompt2)
+        # [description]/[desciption] → main prompt; [Prompt] → prompt_override.
+        # Prepend/post apply to both so framing works for either scenario tag.
         prompt = _build_prompt(pre, post, subj_for_main, scen_desc)
+        if prompt_override:
+            # Subject stays on subject_description (LazyPrompt character pin); do not
+            # duplicate it inside prompt_override.
+            prompt_override = _build_prompt(pre, post, "", prompt_override)
         keywords = _format_keywords(skw, ckw, ckw2)
+
+        selector = _format_minimax_selector(
+            _merge_minimax_selector_fields(
+                _minimax_fields_from_content(subj_raw),
+                _minimax_fields_from_content(scen_raw),
+                _minimax_fields_from_content(scen2_raw),
+            )
+        )
 
         if preview_err:
             err_hdr = "[Lazy automation load error]\n" + "\n".join(preview_err) + "\n"
@@ -1108,6 +1279,7 @@ class LazySubjectSceneAutomation:
             clip_l,
             subject_description,
             prompt_override,
+            selector,
         )
 
 

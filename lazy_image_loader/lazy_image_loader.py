@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import os
 import platform
 import subprocess
@@ -23,7 +24,41 @@ ASPECT_RATIOS: dict[str, float | None] = {
     "Original (no crop)": None,
 }
 
+# Integer aspect pairs for megapixel sizing (Comfy ResolutionSelector style)
+ASPECT_RATIO_WH: dict[str, tuple[int, int] | None] = {
+    "9:16 (Phone)": (9, 16),
+    "16:9 (Landscape)": (16, 9),
+    "1:1 (Square)": (1, 1),
+    "4:5 (Instagram)": (4, 5),
+    "3:4 (Portrait)": (3, 4),
+    "4:3 (Classic)": (4, 3),
+    "2:3 (Photo)": (2, 3),
+    "21:9 (Ultrawide)": (21, 9),
+    "Original (no crop)": None,
+}
+
 DEFAULT_ASPECT = "9:16 (Phone)"
+DEFAULT_MEGAPIXELS = 0.98
+MP_MULTIPLE = 32
+
+
+def size_from_megapixels(
+    megapixels: float,
+    w_ratio: float,
+    h_ratio: float,
+    multiple: int = MP_MULTIPLE,
+) -> tuple[int, int]:
+    """Comfy ResolutionSelector math: MP uses 1024², round to `multiple`."""
+    wr = float(w_ratio)
+    hr = float(h_ratio)
+    if wr <= 0 or hr <= 0:
+        wr, hr = 1.0, 1.0
+    total_pixels = float(megapixels) * 1024 * 1024
+    scale = math.sqrt(total_pixels / (wr * hr))
+    width = int(round(wr * scale / multiple) * multiple)
+    height = int(round(hr * scale / multiple) * multiple)
+    return max(multiple, width), max(multiple, height)
+
 
 def list_input_images() -> list[str]:
     """List images under ComfyUI input/. Works on current ComfyUI (no folder_names 'input')."""
@@ -126,6 +161,30 @@ class LazyImageLoader:
                 ),
                 "aspect_ratio": (list(ASPECT_RATIOS.keys()), {"default": DEFAULT_ASPECT}),
                 "auto_crop": ("BOOLEAN", {"default": True}),
+                "resize_by_megapixels": (
+                    "BOOLEAN",
+                    {
+                        "default": False,
+                        "tooltip": (
+                            "When ON, scale the (cropped) image to width×height from "
+                            "megapixels × aspect (Comfy ResolutionSelector math, multiple of 32). "
+                            "Wire those outputs into MiniMax width/height."
+                        ),
+                    },
+                ),
+                "megapixels": (
+                    "FLOAT",
+                    {
+                        "default": DEFAULT_MEGAPIXELS,
+                        "min": 0.2,
+                        "max": 4.0,
+                        "step": 0.1,
+                        "tooltip": (
+                            "Target megapixels (0.2–4.0). Uses 1024² units like ResolutionSelector. "
+                            "0.98 @ 16:9 → 1344×768 (H3 native)."
+                        ),
+                    },
+                ),
                 "offset_x": (
                     "FLOAT",
                     {
@@ -156,6 +215,7 @@ class LazyImageLoader:
                         "display": "slider",
                     },
                 ),
+                "flip_horizontal": ("BOOLEAN", {"default": False}),
             }
         }
 
@@ -165,8 +225,23 @@ class LazyImageLoader:
     CATEGORY = "vsaan212/lazy"
 
     @classmethod
-    def IS_CHANGED(cls, image, aspect_ratio, auto_crop, offset_x, offset_y, zoom):
-        return f"{image}|{aspect_ratio}|{auto_crop}|{offset_x:.4f}|{offset_y:.4f}|{zoom:.4f}"
+    def IS_CHANGED(
+        cls,
+        image,
+        aspect_ratio,
+        auto_crop,
+        resize_by_megapixels,
+        megapixels,
+        offset_x,
+        offset_y,
+        zoom,
+        flip_horizontal,
+    ):
+        return (
+            f"{image}|{aspect_ratio}|{auto_crop}|{bool(resize_by_megapixels)}"
+            f"|{float(megapixels):.2f}|{offset_x:.4f}|{offset_y:.4f}"
+            f"|{zoom:.4f}|{bool(flip_horizontal)}"
+        )
 
     @classmethod
     def VALIDATE_INPUTS(cls, image):
@@ -181,9 +256,12 @@ class LazyImageLoader:
         image: str,
         aspect_ratio: str,
         auto_crop: bool,
-        offset_x: float,
-        offset_y: float,
-        zoom: float,
+        resize_by_megapixels: bool = False,
+        megapixels: float = DEFAULT_MEGAPIXELS,
+        offset_x: float = 0.0,
+        offset_y: float = 0.0,
+        zoom: float = 1.0,
+        flip_horizontal: bool = False,
     ):
         pil = load_pil_image(image)
         target_ratio = ASPECT_RATIOS.get(aspect_ratio)
@@ -198,6 +276,20 @@ class LazyImageLoader:
                 zoom,
             )
             pil = pil.crop((left, top, left + crop_w, top + crop_h))
+
+        if flip_horizontal:
+            pil = ImageOps.mirror(pil)
+
+        if resize_by_megapixels:
+            wh = ASPECT_RATIO_WH.get(aspect_ratio)
+            if wh is None:
+                g = math.gcd(pil.width, pil.height) or 1
+                wr, hr = pil.width / g, pil.height / g
+            else:
+                wr, hr = float(wh[0]), float(wh[1])
+            tw, th = size_from_megapixels(float(megapixels), wr, hr, MP_MULTIPLE)
+            if (pil.width, pil.height) != (tw, th):
+                pil = pil.resize((tw, th), Image.Resampling.LANCZOS)
 
         tensor = pil_to_tensor(pil)
         return (tensor, pil.width, pil.height)

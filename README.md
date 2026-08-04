@@ -1,6 +1,6 @@
 # Vsaan212-workflow-utilities
 
-ComfyUI custom nodes: selectors, dual-stack subject/scene automation, text utilities, optional LoRA bypass, prompt library, **Lazy Image Loader**, and **LazyPrompt** (multi-target prompt engineer + optional vision). MIT licensed.
+ComfyUI custom nodes: selectors, dual-stack subject/scene automation, text utilities, optional LoRA bypass, prompt library, **Lazy Image Loader**, **Lazy MiniMax All-in-One** (H3), and **LazyPrompt** (multi-target prompt engineer + optional vision). MIT licensed.
 
 ## Nodes (summary)
 
@@ -8,11 +8,12 @@ ComfyUI custom nodes: selectors, dual-stack subject/scene automation, text utili
 |------|----------------|------------|
 | **Subject Selector** | Load `.txt` from `subjectselector/SubjectFiles/` (recursive). | [docs/nodes/subject-selector.md](docs/nodes/subject-selector.md) |
 | **Scenario Selector** | Load `.txt` from `scenarioselector/ScenarioFiles/` (recursive). | [docs/nodes/scenario-selector.md](docs/nodes/scenario-selector.md) |
-| **Lazy-subject-and-scene-automation** | One node: **one subject** + **two scenario** files (up to 6 scenario LoRA sets), **`model_high`** / **`clip_high`** required (single-model **Z-Image**, **Krea2**, Flux, etc.) or full Wan-style **high/low** dual stack when **`model_low`** / **`clip_low`** are wired. **`prompt`**, **`keywords`**, **`subject_description`**, **`prompt_override`**. **Live editors** on the node (queue uses pane text, not disk); **Save edits** to `.txt`; **scenario 2 strength** sliders override `[LoraHighA]` / `[LoraLowA]` model strength. Uses **`lazy_subject_scene_automation/SubjectFiles`** and **`…/ScenarioFiles`**. | [docs/nodes/lazy-subject-scene-automation.md](docs/nodes/lazy-subject-scene-automation.md) |
+| **Lazy-subject-and-scene-automation** | One node: **one subject** + **two scenario** files (up to 6 scenario LoRA sets), **`model_high`** / **`clip_high`** required (single-model **Z-Image**, **Krea2**, Flux, etc.) or full Wan-style **high/low** dual stack when **`model_low`** / **`clip_low`** are wired. **`prompt`**, **`keywords`**, **`subject_description`**, **`prompt_override`**, **`selector`** (MiniMax workflow / reference paths). **Live editors** on the node (queue uses pane text, not disk); **Save edits** to `.txt`; **scenario 2 strength** sliders override `[LoraHighA]` / `[LoraLowA]` model strength. Uses **`lazy_subject_scene_automation/SubjectFiles`** and **`…/ScenarioFiles`**. | [docs/nodes/lazy-subject-scene-automation.md](docs/nodes/lazy-subject-scene-automation.md) |
 | **Text Split** | Split by separator, regex, or **tagged format** (`[Tag]` headers). **Auto-detects** v2 subject/scenario files when the first line is `[LoraHighA]`; otherwise **`tagged_format`** or separator `#` for legacy graphs. | [docs/nodes/text-split.md](docs/nodes/text-split.md) |
 | **Optional Switch LoRA** | Apply a LoRA or pass through when path is `bypass` / empty. | [docs/nodes/optional-switch-lora.md](docs/nodes/optional-switch-lora.md) |
 | **Lazy Prompt Saver** | Save / clone / delete named prompts in `lazy_prompts.json`. | [docs/nodes/lazy-prompt-saver.md](docs/nodes/lazy-prompt-saver.md) |
-| **Lazy Image Loader** | Load from `input/`: browse, drag-and-drop upload, open input folder, **cover crop** to popular ratios (default **9:16**), live drag-to-position preview. | [docs/nodes/lazy-image-loader.md](docs/nodes/lazy-image-loader.md) |
+| **Lazy Image Loader** | Load from `input/`: browse, drag-and-drop upload, open input folder, **cover crop** to popular ratios (default **9:16**), optional **megapixel resize** (0.2–4.0 MP, multiple of 32), live drag-to-position preview. | [docs/nodes/lazy-image-loader.md](docs/nodes/lazy-image-loader.md) |
+| **Lazy MiniMax All-in-One** | MiniMax H3 conditioner: auto T2V / I2V / FL2V / R2V from sockets or automation **`selector`**. Seconds → H3 frame length. Requires ComfyUI 0.30+ native H3. | [docs/nodes/lazy-minimax-all-in-one.md](docs/nodes/lazy-minimax-all-in-one.md) |
 | **LazyPrompt** | Prompt Engineer (LTX / Wan / Flux / SDXL / Pony / SD 1.5), Vision Describe (Qwen2.5-VL), Unload local model. LM Studio API uses native `/api/v1/chat` with OpenAI fallback. | [docs/nodes/lazyprompt.md](docs/nodes/lazyprompt.md) |
 
 **Documentation index:** [docs/README.md](docs/README.md)

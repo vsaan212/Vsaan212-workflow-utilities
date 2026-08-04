@@ -42,6 +42,7 @@ Dropdowns are built when the node is created or when the server refreshes lists 
 | `keywords` | Trigger-style tags from subject then scenario `KeywordA`–`KeywordC` blocks, comma-separated with a trailing comma when non-empty. |
 | `subject_description` | Raw subject-side description text only (no prepend/post); useful when `pass_subject_to_main_prompt` is off but you still need the subject text elsewhere. |
 | `prompt_override` | Scenario **`[Prompt]`** text for LazyPrompt (see node doc); empty when scenarios use **`[desciption]`** only. |
+| `selector` | MiniMax routing string (`[Workflow]`, reference image/audio paths) for Lazy MiniMax All-in-One; empty when those tags are absent. |
 
 ### 5. Live file preview (extension)
 
