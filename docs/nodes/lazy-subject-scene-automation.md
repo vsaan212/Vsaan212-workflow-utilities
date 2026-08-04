@@ -50,6 +50,7 @@ Dropdown lists refresh when the node is created; use ComfyUI **`R`** after addin
 | `scenario_2_high_strength` | FLOAT | Overrides `[LoraHighA]` **model** strength in scenario 2 live text (0–10, step 0.01). Sliders sit above the scenario 2 live editor. |
 | `scenario_2_low_strength` | FLOAT | Overrides `[LoraLowA]` **model** strength in scenario 2 live text. Clip strengths in the file are unchanged. |
 | `pass_subject_to_main_prompt` | BOOLEAN | As before. |
+| `randomize_subject_in_directory` | BOOLEAN | **OFF** (default): use the selected `subject` dropdown. **ON**: each queue randomly picks another `.txt` from the **same folder** as the selected subject (e.g. select `cast/alice` → random pick among all files in `SubjectFiles/cast/`). Reads from disk; ignores the live subject pane. |
 | `prepend_text` | STRING (optional, **socket only**) | Wired text prepended to the built prompt; empty if unconnected. |
 | `post_text` | STRING (optional, **socket only**) | Wired text after the subject block; empty if unconnected. |
 
@@ -63,6 +64,7 @@ Dropdown lists refresh when the node is created; use ComfyUI **`R`** after addin
 | `clip_high` / `clip_low` | After the same stacks as the paired model outputs. |
 | `subject_description` | Raw subject-side description only (no prepend/post). |
 | `prompt_override` | **Prompt override output** — text from scenario `[Prompt]` blocks (scenario 1 and/or 2). Empty when files use `[desciption]` instead. Wire to LazyPrompt **prompt_override_input**. Not included in the main `prompt` output. |
+| `selector` | MiniMax / media routing blob for [Lazy MiniMax All-in-One](lazy-minimax-all-in-one.md). Built from `[Workflow]`, `[ReferenceImage1]`–`[ReferenceImage3]`, `[AudioReference]` in subject + scenario files (see below). Empty when those tags are absent. |
 
 ## LoRA application order
 
@@ -118,6 +120,9 @@ If there is only **one** path section before the description, that single LoRA i
 | `LoraHighB` / `LoraLowB` | Optional pair (slot B). |
 | `LoraHighC` / `LoraLowC` | Optional pair (slot C). |
 | `KeywordA` / `KeywordB` / `KeywordC` | Merged into `keywords` output. |
+| `Workflow` | Optional. MiniMax mode hint: `T2V` / `T2VA` / `I2V` / `I2VA` / `FL2V` / `R2V` (aliases normalized). Emitted on **`selector`**. Place **before** description / Prompt. |
+| `ReferenceImage1` / `ReferenceImage2` / `ReferenceImage3` | Optional paths under ComfyUI `input/` (e.g. `folder/image.png`). Emitted on **`selector`**. |
+| `AudioReference` | Optional audio path under `input/`. Emitted on **`selector`**. |
 | `description` or `desciption` | Subject description in the final `prompt`. |
 
 **Deprecated (still read):** `SubjectLoraHigh` / `SubjectLoraLow` for slot A; `OptionalLoraAHigh` / `OptionalLoraAlow` for slot B; `OptionalLoraBHigh` / `OptionalLoraBlow` for slot C. Prefer the `LoraHigh*` / `LoraLow*` names in new files.
@@ -174,6 +179,7 @@ If only **one** path section exists before the description, that LoRA is applied
 | `LoraHighB` / `LoraLowB` | Optional pair (slot B). |
 | `LoraHighC` / `LoraLowC` | Optional pair (slot C). |
 | `KeywordA` / `KeywordB` / `KeywordC` | Appended after subject keywords in `keywords`. |
+| `Workflow` / `ReferenceImage1`–`3` / `AudioReference` | Same MiniMax selector tags as subject files. Merged into **`selector`** (scenario non-empty values override subject; scenario 2 overrides scenario 1). |
 | `description` or `desciption` | Scenario text; appears after the subject block in `prompt`. |
 | `Prompt` | **Mutually exclusive with `description`/`desciption`.** Body is sent on **`prompt_override`** (for LazyPrompt LLM override), not in the main `prompt` output. If both tags exist, **`Prompt` wins**. Multiline bodies include all lines until the next **known** `[Tag]` section (lines with other `[brackets]` stay in the prompt). |
 
@@ -226,6 +232,25 @@ Cinematic shot, camera pans {left|right}, {morning|evening} light
 - Live editor panes and **Save edits** keep the **source** text with `{…}`; expansion happens in **`run`**, not in **`read_pair`** preview loads.
 
 This replaces an external random-prompt handler for scenario-side variation. Wire **`[Prompt]`** with random groups to **`prompt_override`** → LazyPrompt **`prompt_override_input`** when using the LLM path.
+
+### MiniMax selector example
+
+Place new tags **before** `[desciption]` / `[Prompt]`:
+
+```text
+[Workflow]
+R2V
+[ReferenceImage1]
+chars/hero.png
+[ReferenceImage2]
+style/mood.png
+[AudioReference]
+sfx/voice.wav
+[desciption]
+A blond girl jumps on a trampoline
+```
+
+Wire **`selector`** → [Lazy MiniMax All-in-One](lazy-minimax-all-in-one.md) **`selector`**.
 
 ---
 

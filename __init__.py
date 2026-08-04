@@ -134,6 +134,16 @@ except Exception:
     LIL_CLASSES = {}
     LIL_DISPLAY = {}
 
+# Lazy MiniMax H3 all-in-one conditioner
+try:
+    from .Lazy_minimax import (
+        NODE_CLASS_MAPPINGS as MM_CLASSES,
+        NODE_DISPLAY_NAME_MAPPINGS as MM_DISPLAY,
+    )
+except Exception:
+    MM_CLASSES = {}
+    MM_DISPLAY = {}
+
 # --- API routes for live folder scanning ---
 from aiohttp import web
 from server import PromptServer
@@ -226,3 +236,6 @@ NODE_DISPLAY_NAME_MAPPINGS.update(PG_DISPLAY)
 
 NODE_CLASS_MAPPINGS.update(LIL_CLASSES)
 NODE_DISPLAY_NAME_MAPPINGS.update(LIL_DISPLAY)
+
+NODE_CLASS_MAPPINGS.update(MM_CLASSES)
+NODE_DISPLAY_NAME_MAPPINGS.update(MM_DISPLAY)

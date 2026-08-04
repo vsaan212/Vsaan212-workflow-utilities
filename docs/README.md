@@ -15,6 +15,7 @@ Detailed workflow and file-format guides live under **`docs/nodes/`**. End-to-en
 | [nodes/optional-switch-lora.md](nodes/optional-switch-lora.md) | Optional Switch LoRA |
 | [nodes/lazy-prompt-saver.md](nodes/lazy-prompt-saver.md) | Lazy Prompt Saver |
 | [nodes/lazy-image-loader.md](nodes/lazy-image-loader.md) | Lazy Image Loader |
+| [nodes/lazy-minimax-all-in-one.md](nodes/lazy-minimax-all-in-one.md) | Lazy MiniMax All-in-One (H3 T2V/I2V/FL2V/R2V) |
 | [nodes/lazyprompt.md](nodes/lazyprompt.md) | LazyPrompt (Prompt Engineer, Vision Describe, Unload) |
 | [nodes/lazyprompt-prompt-enhancement.md](nodes/lazyprompt-prompt-enhancement.md) | LazyPrompt: enhancement pipeline and system prompt override |
 
