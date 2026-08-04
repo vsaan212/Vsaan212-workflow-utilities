@@ -5,7 +5,13 @@ import random
 import re
 
 from .environment_presets import ENVIRONMENT_PRESETS
-from .system_prompts import has_audio, is_video_model
+from .system_prompts import (
+    has_audio,
+    is_screenplay_skill,
+    is_tag_style_model,
+    is_video_model,
+    is_wan_skill,
+)
 
 
 def _character_preface(character: str, target_model: str) -> str:
@@ -18,7 +24,7 @@ def _character_preface(character: str, target_model: str) -> str:
             "use this physical description exactly — anchor identity early in the prompt; "
             "do not invent or contradict it"
         )
-    elif "SDXL" in target_model or "Pony" in target_model or "SD 1.5" in target_model:
+    elif is_tag_style_model(target_model):
         hint = (
             "convert these descriptors into appropriate tags for the target format; "
             "do not drop or replace them"
@@ -70,41 +76,41 @@ def compose_user_scene_input(
 def build_prompt_augmentation(
     target_model: str,
     environment: str,
-    frame_count: int,
-    fps: float,
+    video_length_sec: float,
     seed: int,
-    screenplay_mode: bool,
     has_scene_context: bool,
 ) -> str:
     """
     Text appended after the user's scene/instruction block.
     Does not include the raw user idea — the caller prepends that with LTX-style wrappers.
+    Video length hints use seconds only (no frame/FPS math).
     """
     parts: list[str] = []
 
     if is_video_model(target_model):
-        duration_sec = round(frame_count / max(fps, 1.0), 1)
+        duration_sec = max(float(video_length_sec), 0.25)
+        duration_sec = round(duration_sec, 2)
 
-        if "Wan" in target_model:
+        if is_wan_skill(target_model):
             parts.append(
-                f"VIDEO LENGTH: {duration_sec}s ({frame_count} frames at {fps:g}fps). "
+                f"VIDEO LENGTH: {duration_sec:g}s. "
                 f"Write 80-120 words. One clear shot progression with motion throughout.\n"
             )
         else:
-            if screenplay_mode and "LTX" in target_model:
+            if is_screenplay_skill(target_model):
                 if duration_sec <= 5:
                     arc = (
-                        f"SHORT clip: {duration_sec}s ({frame_count} frames). "
+                        f"SHORT clip: {duration_sec:g}s. "
                         f"Write the Characters block, Scene block, then 2–3 action beats."
                     )
                 elif duration_sec <= 15:
                     arc = (
-                        f"MEDIUM clip: {duration_sec}s ({frame_count} frames). "
+                        f"MEDIUM clip: {duration_sec:g}s. "
                         f"Write the Characters block, Scene block, then 4–5 action beats."
                     )
                 else:
                     arc = (
-                        f"LONG clip: {duration_sec}s ({frame_count} frames). "
+                        f"LONG clip: {duration_sec:g}s. "
                         f"Write the Characters block, Scene block, then 6–8 action beats. "
                         f"Depth over breadth — stay in the same location, go deeper into "
                         f"the physical action and dialogue, do not introduce new locations."
@@ -112,14 +118,14 @@ def build_prompt_augmentation(
             else:
                 if duration_sec <= 5:
                     arc = (
-                        f"SHORT clip: {duration_sec}s ({frame_count} frames). "
+                        f"SHORT clip: {duration_sec:g}s. "
                         f"4–5 sentences. Stay inside the scene the user described — "
                         f"do not add locations, characters, or events they did not mention. "
                         f"One subject, one action, one camera move. Close on sound."
                     )
                 elif duration_sec <= 15:
                     arc = (
-                        f"MEDIUM clip: {duration_sec}s ({frame_count} frames). "
+                        f"MEDIUM clip: {duration_sec:g}s. "
                         f"5–6 sentences. Stay inside the scene the user described. "
                         f"Go deeper — more texture, more physical detail, richer audio — "
                         f"do not introduce new locations or characters the user did not mention. "
@@ -127,7 +133,7 @@ def build_prompt_augmentation(
                     )
                 else:
                     arc = (
-                        f"LONG clip: {duration_sec}s ({frame_count} frames). "
+                        f"LONG clip: {duration_sec:g}s. "
                         f"6–8 sentences. DEPTH NOT BREADTH — the extra length means more detail "
                         f"on the same subject in the same scene, not more locations, not more characters, "
                         f"not more events. Use it for: richer texture on the environment, "
@@ -139,7 +145,7 @@ def build_prompt_augmentation(
             parts.append(f"VIDEO LENGTH: {arc}\n")
 
     if has_scene_context:
-        if "Wan" in target_model:
+        if is_wan_skill(target_model):
             parts.append(
                 "IMAGE / SCENE CONTEXT (I2V): A starting frame or detailed scene description was "
                 "provided above. Treat it as the first frame — describe how existing elements "

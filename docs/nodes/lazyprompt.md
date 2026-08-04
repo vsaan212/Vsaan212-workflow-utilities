@@ -14,22 +14,24 @@ Three related nodes for LLM-assisted prompting inside ComfyUI.
 
 ## LazyPrompt — Prompt Engineer
 
-**Purpose:** Expand a short user idea into a long-form prompt tuned for a **target model** (LTX Video, Wan, Flux, SDXL, Pony, SD 1.5).
+**Purpose:** Expand a short user idea into a long-form prompt tuned for a **target skill** (LTX Video, Wan, Flux, SDXL, Pony, SD 1.5, plus Dialog / Screenplay variants).
 
 ### Workflow wiring
 
-1. Choose **`target_model`** so the correct JSON system template and pacing rules apply (**`None`** = no default template; optional minimal mode with override — see [lazyprompt-prompt-enhancement.md](lazyprompt-prompt-enhancement.md)). Video vs image token budgets differ.
+1. Choose **`target_model`** so the correct **Model_Skills** system template and pacing rules apply (**`None`** = no default template; optional minimal mode with override — see [lazyprompt-prompt-enhancement.md](lazyprompt-prompt-enhancement.md)). Skills are loaded from **`lazyprompt/Model_Skills/*.md`** (restart or **R** after edits). Video vs image budgets differ; Dialog / Screenplay are separate dropdown entries.
 2. Set **`model`** to either a **local Hugging Face** Gemma-style LLM (8B/3B paths) or **LM Studio (API)**.
-3. Enter your idea in **`user_input`**. Wire **`character`** ← **`subject_description`** from **Lazy-subject-and-scene-automation** so subject **`[desciption]`** always reaches the LLM (including when **`prompt_override_input`** is set). Optional **`lora_triggers`**, **`environment`** preset.
+3. Enter your idea in **`user_input`** (prompt to be enhanced). Wire **`character`** ← **`subject_description`** from **Lazy-subject-and-scene-automation** so subject **`[desciption]`** always reaches the LLM (including when **`prompt_override_input`** is set). Optional **`lora_triggers`**, **`environment`** preset.
 4. Optional **`scene_context`** — connect text from **Vision Describe** or any frame/scene description.
 5. Optional **`prompt_override_input`** — when wired/non-empty, **replaces `user_input`** for the LLM request (LM Studio API and local HF). Typical source: **`prompt_override`** from **Lazy-subject-and-scene-automation** when the scenario file uses a **`[Prompt]`** block instead of **`[desciption]`**.
-6. Optional **`image`** — **LM Studio only**, when using a **vision** model in LM Studio: start frame or reference is sent as JPEG in an OpenAI-style chat (same general pattern as ComfyExpo LM Studio nodes). **Ignored** for local 8B/3B Transformers backends; use Vision Describe → `scene_context` instead.
-7. **`bypass`** ON skips the LLM and passes the effective user text through (override if connected, else **`user_input`**).
-8. Outputs: **`PROMPT`** (use for encoding), **`PREVIEW`** (duplicate for UI), **`NEG_PROMPT`** (where the stack splits negatives for SDXL/Pony/SD1.5 tag formats).
+6. Optional **`user_instructions`** — temporary instructions injected into `***UserPrompt***` markers in the system prompt (empty = block omitted).
+7. Optional **`image`** — **LM Studio only**, when using a **vision** model in LM Studio: start frame or reference is sent as JPEG in an OpenAI-style chat (same general pattern as ComfyExpo LM Studio nodes). **Ignored** for local 8B/3B Transformers backends; use Vision Describe → `scene_context` instead.
+8. **`bypass`** ON skips the LLM and passes the effective user text through (override if connected, else **`user_input`**).
+9. Outputs: **`PROMPT`** (use for encoding), **`PREVIEW`** (duplicate for UI), **`NEG_PROMPT`** (where the stack splits negatives for SDXL/Pony/SD1.5 tag formats).
 
 ### Operational tips
 
-- Match **frame_count / fps** to your video node so length hints align with clip duration.
+- Match **`video_length`** (seconds) to your clip so length hints align; image skills ignore it.
+- **`creativity`** is temperature **0.1–1.0** (step **0.1**); keep ≤ **1.0** for LM Studio.
 - **`max_output_tokens`** — hard cap for generated completion length (HF / LM Studio). Default **900**; pacing asks for **~⅓** of that (~300 tokens). Raise for longer cinematic prompts (e.g. **4500** max → ~**1500** target).
 - **`keep_model_loaded`** saves reload time at the cost of VRAM; use **Unload local model** when done.
 - **`offline_mode`** + **`local_path`** for HF models when you do not want hub access.

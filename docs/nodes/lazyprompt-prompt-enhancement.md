@@ -1,10 +1,10 @@
 # LazyPrompt — Prompt Engineer: how enhancement and system override work
 
-This document describes **LazyPrompt — Prompt Engineer** (`LazyPromptEngineer`): how your idea becomes the final LLM request, what counts as “prompt enhancement,” and how the **`system_prompt`** text field overrides (or restores) the built-in templates.
+This document describes **LazyPrompt — Prompt Engineer** (`LazyPromptEngineer`): how your idea becomes the final LLM request, what counts as “prompt enhancement,” and how the **`system_prompt`** text field overrides (or restores) the built-in skill templates.
 
 For install, wiring, and Vision Describe, see [lazyprompt.md](lazyprompt.md).
 
-Default templates are edited in **`lazyprompt/system_prompts.json`** (inside the custom node pack, next to `system_prompts.py`). After editing, **restart ComfyUI** or press **R** (refresh) so Python reloads the file.
+Default templates are edited in **`lazyprompt/Model_Skills/*.md`**. After editing or adding a skill file, **restart ComfyUI** or press **R** (refresh) so Python rescans the folder. The **`target_model`** dropdown is built from each file’s header (`Model Name` + `Media Type`, icon from `Model Type`).
 
 ---
 
@@ -12,8 +12,8 @@ Default templates are edited in **`lazyprompt/system_prompts.json`** (inside the
 
 Each run (when **`bypass`** is off) builds an OpenAI-style chat payload:
 
-1. **System message** — either your **`system_prompt`** text (if non-empty after trim) or the **JSON template** chosen from **`target_model`** (and **`screenplay_mode`** for LTX). The **`None`** target loads no template (empty system unless you use override).
-2. **User message** — your scene/instruction text plus every **dynamic enhancement** appended at the end (pacing, content tier, dialogue rules, LoRA order, environment block, etc.).
+1. **System message** — either your **`system_prompt`** text (if non-empty after trim) or the **Model_Skills** template for **`target_model`**. Optional **`user_instructions`** are injected into `***UserPrompt***` … `***UserPromptEnd***` (or the whole block is stripped when empty). The **`None`** target loads no template (empty system unless you use override).
+2. **User message** — your scene/instruction text plus every **dynamic enhancement** appended at the end (pacing, content tier, LoRA order, environment block, video length in **seconds**, etc.).
 
 When **[minimal mode](#minimal-mode)** applies (`None` target **and** **`system_prompt`** or **`prompt_override_input`** filled), the **user** message is override/idea only (no augmentation tail). **Otherwise**, the LLM receives the full composed **user** string with enhancements (unless **`bypass`** is on — then no LLM runs; see [Bypass](#bypass-mode)).
 
@@ -26,15 +26,16 @@ flowchart TD
     ENV[environment]
     IMG[image optional LM Studio only]
     SYS[system_prompt widget]
+    UIN[user_instructions optional]
     TM[target_model]
   end
 
   subgraph compose [Composition in code]
     EI[effective_input: scene plus user]
     MERGE["append --- augmentation if any"]
-    TAIL[user_tail: pacing tiers dialogue lora etc]
+    TAIL[user_tail: pacing tiers lora etc]
     UTXT["user_text = merged_effective_input plus user_tail"]
-    ESP["effective_system_prompt = SYS or get_system_prompt"]
+    ESP["effective_system_prompt = SYS or skill MD plus UserPrompt inject"]
   end
 
   subgraph api [Backend]
@@ -52,6 +53,7 @@ flowchart TD
   TAIL --> UTXT
   TM --> ESP
   SYS --> ESP
+  UIN --> ESP
   IMG --> MSG
   UTXT --> MSG
   ESP --> MSG
@@ -60,38 +62,44 @@ flowchart TD
 
 ---
 
-## 1. Auto system prompt (default)
+## 1. Auto system prompt (Model_Skills)
 
 If **`system_prompt`** is empty or only whitespace, the node sets:
 
 ```text
-effective_system_prompt = get_system_prompt(target_model, screenplay_mode)
+effective_system_prompt = apply_user_prompt_injection(get_system_prompt(target_model), user_instructions)
 ```
 
-Templates are loaded from **`lazyprompt/system_prompts.json`** (keys below). Edits require restart or **R**.
+Each skill is one Markdown file under **`lazyprompt/Model_Skills/`**. Header schema:
 
-Routing (substring match on **`target_model`** labels):
+```text
+===Header===
+Model Type: Video
+Model Name: LTX 2.3
+Media Type: Video; Cinematic Arc + Audio
+Is Video: true
+Has Audio: true
+Prompt:
+<system prompt body including ***UserPrompt*** markers>
+```
 
-| `target_model` | System template key |
-|----------------|---------------------|
-| **`None`** (first dropdown entry) | *(empty string — no template)* |
-| `LTX` + **`screenplay_mode`** true | `ltx_23_screenplay` |
-| `LTX` | `ltx_23` |
-| `Wan` | `wan_22` |
-| `Flux` | `flux` |
-| `SDXL` | `sdxl` |
-| `Pony` | `pony` |
-| `SD 1.5` | `sd15` |
-| (unrecognized label) | **`flux`** fallback if present |
+| Field | Role |
+|-------|------|
+| **Model Type** | Icon for the dropdown (`Video` / `Image` / `Sound`) |
+| **Model Name** | Display name |
+| **Media Type** | Short subtitle in the dropdown |
+| **Is Video** | Enables video length / pacing / audio env lines |
+| **Has Audio** | Extra AUDIO reminder in augmentation |
+| **Prompt** | Full system template body |
 
-Those templates define output shape (e.g. Wan 80–120 words, SDXL `POSITIVE:` / `NEGATIVE:` blocks, LTX audio layers).
+Variants (Dialog, Screenplay, etc.) are **separate skills**, not UI toggles. Example files: `LTX_2.3.md`, `LTX_2.3_Dialog.md`, `LTX_2.3_Screenplay.md`, `Wan_2.2.md`, `Flux.1.md`, …
 
 ### Minimal mode
 
 When **`target_model`** is **`None`** **and** either **`system_prompt`** or **`prompt_override_input`** has text:
 
-- **System message** — `system_prompt` if set, otherwise empty.
-- **User message** — scenario override or **`user_input`** only (including the Vision Describe wrapper if **`scene_context`** is wired). **No** `---` augmentation block, **no** pacing/tier/dialogue/LoRA tail.
+- **System message** — `system_prompt` if set (still with UserPrompt injection), otherwise empty.
+- **User message** — scenario override or **`user_input`** only (including the Vision Describe wrapper if **`scene_context`** is wired). **No** `---` augmentation block, **no** pacing/tier/LoRA tail.
 
 When **`target_model`** is **`None`** and both **`system_prompt`** and **`prompt_override_input`** are empty: the **full** augmentation path runs (environment, pacing, tiers, etc.).
 
@@ -101,119 +109,77 @@ When **`target_model`** is **`None`** and both **`system_prompt`** and **`prompt
 
 ### What “override” means
 
-If **`system_prompt`** has **any non-empty content after `.strip()`**, the node uses **exactly that string** as the system message (for **any** `target_model`, including **`None`**):
+If **`system_prompt`** has **any non-empty content after `.strip()`**, the node uses **exactly that string** as the system message base (for **any** `target_model`, including **`None`**). The Model_Skills body is **not** merged. **`user_instructions`** still run through `apply_user_prompt_injection` on that base.
 
-```text
-effective_system_prompt = system_prompt.strip()
-```
+### `user_instructions` (optional input)
 
-The JSON template for the current **`target_model`** is **not** merged, prepended, or appended. You are fully responsible for format and content.
+Wire a text node to **`user_instructions`** (`forceInput`, no display widget).
 
-For **`None`** + non-empty override, see [minimal mode](#minimal-mode): the **user** side also drops automatic augmentation so only your override + idea drive the LLM.
+| Input | Behavior |
+|-------|----------|
+| Empty | Entire `***UserPrompt***` … `***UserPromptEnd***` section is **removed** — nothing passed |
+| Non-empty | Text is placed between the markers (markers kept). If markers are missing, a standard block is appended |
+
+Default skill MD files document that populated UserPrompt text is mandatory.
 
 ### What still applies when you override
 
-Unless **[minimal mode](#minimal-mode)** applies (`None` target **and** override text), with a custom system prompt the node **still**:
+Unless **[minimal mode](#minimal-mode)** applies, with a custom system prompt the node **still**:
 
-- Appends the **augmentation** block from `build_prompt_augmentation` (video length arcs, environment preset lines, character hints, I2V / reference lines) to the **user** message, after a `---` separator (when that block is non-empty).
-- Appends the **dynamic `user_tail`** to the **user** message: pacing / token soft targets for video, content-tier instructions (explicit / sensual / neutral), numbered-step enforcement, “no invented people” when no person tokens detected, multi-subject spatial instructions, dialogue instructions (video + `invent_dialogue`), LoRA trigger ordering, etc.
+- Appends the **augmentation** block from `build_prompt_augmentation` (video length in **seconds**, environment, I2V / reference lines) after `---`.
+- Appends the **dynamic `user_tail`**: pacing / token soft targets, content-tier instructions, numbered-step enforcement, “no invented people”, multi-subject spatial instructions, LoRA trigger ordering, etc.
 
-So override replaces **only** the system-role instructions, not the runtime “injections” in the user message.
-
-### What stops applying (or is bypassed logically)
-
-- **`screenplay_mode`** no longer switches JSON-backed system text **unless** you replicate that yourself in the override field — the router `get_system_prompt(..., screenplay_mode)` is skipped when override is non-empty.
-- Target-specific wording from **`system_prompts.json`** is gone unless you paste it into **`system_prompt`**.
+Dialogue / screenplay formatting now lives in the selected **skill MD**, not in `invent_dialogue` / `screenplay_mode` toggles (those widgets were removed).
 
 ### Clearing the override in the UI
 
-The extension `js/lazyprompt.js` adds:
-
-- A context menu item: **Use auto system prompt (clear override)**.
-- A button: **Auto system prompt (clear override)**.
-
-Both set the widget value to `""` so the node returns to **`get_system_prompt`** behavior.
-
-Whitespace-only text counts as empty after trim and falls back to auto.
+The extension `js/lazyprompt.js` adds a context menu item and button to clear **`system_prompt`** back to auto (Model_Skills).
 
 ---
 
 ## 3. User message composition (“prompt enhancement”)
 
-Enhancement is everything that turns **`user_input`** into **`user_text`** before the model runs.
-
 ### Step A — `effective_input`
 
-1. **Without `scene_context`:** `effective_input = user_input.strip()`.
-2. **With `scene_context`:** the vision (or manual) description is wrapped as authoritative scene text; **`user_input`** is framed as direction/mood/action layered on top:
-
-   - Labeled blocks tell the model not to contradict the scene description.
+1. **Without `scene_context`:** `effective_input = user_input.strip()` (or **`prompt_override_input`** when set).
+2. **With `scene_context` / `character`:** labeled layers (scene + subject + user direction).
 
 ### Step B — `build_prompt_augmentation(...)`
 
-Called with **`target_model`**, **`environment`**, **`frame_count` / `fps`** (from **`video_length`** and **`fps`** for video targets), **`character`**, **`env_seed`**, **`screenplay_mode`**, and whether visual context exists (`scene_context` or LM Studio + **`image`**).
+Called with **`target_model`**, **`environment`**, **`video_length`** (seconds only for video skills), **`env_seed`**, and whether visual context exists.
 
 It may append:
 
-- **VIDEO LENGTH** — sentence-count / beat-count guidance scaled to duration; Wan gets a fixed “80–120 words” line; LTX screenplay mode gets different arc text than standard LTX.
-- **IMAGE / SCENE CONTEXT** — I2V-style grounding when visual context is present (wording differs for Wan vs other video vs image targets).
-- **ENVIRONMENT** — location, lighting, and (for video) sound from presets; **Random** uses **`env_seed`** (0 = different pick each run).
-- **CHARACTER** — how to use the **`character`** string (tags vs prose depends on target).
-- **AUDIO** — extra reminder for LTX (model has audio).
+- **VIDEO LENGTH** — sentence/beat guidance from duration in **seconds** (no FPS / frame math). Wan gets a fixed “80–120 words” line; Screenplay skills get beat-count arcs.
+- **IMAGE / SCENE CONTEXT** — I2V / I2I grounding when visual context is present.
+- **ENVIRONMENT** — location, lighting, and (for video) sound.
+- **AUDIO** — reminder when the skill has **Has Audio: true**.
 
-If any of that is produced, it is concatenated after:
+### Step C — `user_tail`
 
-```text
-effective_input + "\n\n---\n" + augmentation
-```
-
-### Step C — `user_tail` (when not bypassing and not minimal mode)
-
-These are **separate bracketed instructions** concatenated after `effective_input` (and augmentation). They depend on **`user_input`**, **`scene_context`**, **`target_model`**, **`video_length`**, **`fps`**, **`invent_dialogue`**, **`lora_triggers`**, etc. Highlights:
-
-| Block | Role |
-|-------|------|
-| **Pacing / length** | Video: derives action count from duration, adds “HARD STOP” style pacing and soft token target; image: short format reminder. |
-| **Content tier** | Scans **`user_input`** for explicit vs sensual vs neutral keywords; adds NSFW / undressing / age rules accordingly. |
-| **Sequence** | If two or more numbered steps detected, enforces order. |
-| **No person** | If no person-like tokens in `user_input` + `scene_context`, forbids inventing characters. |
-| **Multi-subject** | Spatial tracking if two+ people heuristics match. |
-| **Dialogue** | Video only: invent vs user-only vs silent, tied to **`invent_dialogue`** and quotes in input. |
-| **LoRA** | If **`lora_triggers`** set, instructs model to start output with those exact words. |
-
-Final **`user_text`** = `effective_input` (with optional `---` augmentation) **+** `user_tail`.
+Bracketed runtime instructions (pacing, content tier, sequence, no-person, multi-subject, LoRA). **Not** invent-dialogue (use the Dialog skill instead).
 
 ---
 
 ## 4. Backends: same messages, different transport
 
-- **LM Studio (API):** `messages` as JSON; optional **`image`** as a second part of the user message (`image_url` + text). Requires **`lm_studio_model`** filled in.
-- **Local HF (8B / 3B):** same `messages` passed through `apply_chat_template` + `generate`. **`image`** is not sent; use Vision Describe → **`scene_context`** instead.
-
-Post-processing (`_clean_output`, split `POSITIVE`/`NEGATIVE` for tag targets, negative prompt builder for video) runs on the decoded assistant text for both paths.
+- **LM Studio (API):** `messages` as JSON; optional **`image`**. **`creativity`** is a float **0.1–1.0** (step 0.1); values above 1.0 are clamped (LM Studio rejects them).
+- **Local HF (8B / 3B):** same `messages` via `apply_chat_template` + `generate`. **`image`** is not sent; use Vision Describe → **`scene_context`**.
 
 ---
 
 ## 5. Bypass mode
 
-When **`bypass`** is **true**:
-
-- No LLM call; **`user_input.strip()`** is returned for both **`PROMPT`** and **`PREVIEW`**.
-- **`NEG_PROMPT`** is still built with the video-oriented keyword heuristic (`_build_negative_prompt`), not the SDXL split logic — so bypass is aimed at quick passthrough / debug, not full parity with normal **`target_model`** negative handling.
+When **`bypass`** is **true**: no LLM call; effective user text is returned for **`PROMPT`** / **`PREVIEW`**.
 
 ---
 
-## 6. Implementation notes (common “it doesn’t work like I thought” cases)
+## 6. Implementation notes
 
-1. **Templates on disk** — Editable defaults live in **`lazyprompt/system_prompts.json`**. Restart ComfyUI or press **R** after edits.
-
-2. **Override vs `target_model`** — Changing **`target_model`** still changes augmentation, pacing, finalize/negative behavior, and dialogue/video detection — **except** in **[minimal mode](#minimal-mode)** (`None` **and** override text), where the automatic **user** tail is omitted.
-
-3. **Minimum new tokens (local HF only)** — Local generation uses a computed **`min_new_tokens`**. That can encourage padding if the model would naturally stop sooner; LM Studio path does not use that parameter.
-
-4. **Flux default** — If **`target_model`** ever fails to match known labels, **`get_system_prompt`** falls back to the **`flux`** entry in **`system_prompts.json`** when present.
-
-5. **PREVIEW vs PROMPT** — After a normal run, both outputs are the same cleaned positive string; **`NEG_PROMPT`** carries the derived negative (or split from model for tag targets).
+1. **Skills on disk** — Edit / add **`lazyprompt/Model_Skills/*.md`**. Restart or **R** after changes.
+2. **Override vs `target_model`** — Changing skill still changes augmentation, pacing, and finalize/negative behavior (except minimal mode).
+3. **Legacy workflows** — Old `screenplay_mode` / `invent_dialogue` / `fps` widgets are ignored; pick Screenplay or Dialog skills instead. Old creativity labels are coerced to floats (1.1 → 1.0).
+4. **PREVIEW vs PROMPT** — Same cleaned positive string after a normal run; **`NEG_PROMPT`** carries the derived or split negative.
 
 ---
 
@@ -222,8 +188,8 @@ When **`bypass`** is **true**:
 | Concern | Location |
 |---------|----------|
 | Node UI, `generate`, message assembly, cleaning | `lazyprompt/lazy_prompt_engineer.py` |
-| Per-target template router + **`None`** handling | `lazyprompt/system_prompts.py` |
-| **Editable default system prompts** | **`lazyprompt/system_prompts.json`** |
+| Skill loader, header parse, UserPrompt inject, **`None`** | `lazyprompt/system_prompts.py` |
+| **Editable skill system prompts** | **`lazyprompt/Model_Skills/*.md`** |
 | Environment + duration + character augmentation | `lazyprompt/message_builder.py` |
 | Environment preset table | `lazyprompt/environment_presets.py` |
 | Clear override button / menu | `js/lazyprompt.js` |

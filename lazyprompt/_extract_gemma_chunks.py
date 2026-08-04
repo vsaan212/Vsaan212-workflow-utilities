@@ -15,8 +15,8 @@ def main():
         + "\n"
     )
     (_HERE / "environment_presets.py").write_text(env, encoding="utf-8")
-    # System prompts now live in lazyprompt/system_prompts.json (editable defaults).
-    print("OK", len(lines[45:916]), "(environment_presets only; edit system_prompts.json for templates)")
+    # System prompts now live in lazyprompt/Model_Skills/*.md (editable defaults).
+    print("OK", len(lines[45:916]), "(environment_presets only; edit Model_Skills/*.md for templates)")
 
 
 if __name__ == "__main__":
