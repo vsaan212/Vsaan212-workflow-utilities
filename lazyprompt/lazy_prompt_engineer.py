@@ -31,12 +31,13 @@ from .message_builder import (
     split_positive_negative_block,
 )
 from .system_prompts import (
-    JSON_PROMPTS_HINT,
-    TARGET_MODEL_DEFAULT,
-    TARGET_MODELS,
-    default_fps_for_target,
+    SKILLS_HINT,
+    apply_user_prompt_injection,
+    get_default_target_model,
     get_system_prompt,
+    get_target_model_choices,
     is_none_target,
+    is_tag_style_model,
     is_video_model,
 )
 
@@ -123,22 +124,23 @@ class LazyPromptEngineer:
     @classmethod
     def INPUT_TYPES(s):
         env_keys = list(ENVIRONMENT_PRESETS.keys())
+        target_choices = get_target_model_choices()
         return {
             "required": {
                 "bypass": ("BOOLEAN", {"default": False, "tooltip": "When ON, skips the LLM entirely and sends your text straight through. Use for manual prompts or testing."}),
                 "user_input": ("STRING", {
                     "multiline": True,
                     "default": "a woman walks through a rain-soaked city street at night",
-                    "tooltip": "Rough idea, sentence, or numbered steps. The LLM expands into a prompt for the selected target model.",
+                    "tooltip": "Prompt to be enhanced — short idea, sentence, or numbered steps. The LLM expands it for the selected skill.",
                 }),
                 "target_model": (
-                    TARGET_MODELS,
+                    target_choices,
                     {
-                        "default": TARGET_MODEL_DEFAULT,
+                        "default": get_default_target_model(),
                         "tooltip": (
-                            "Prompt style: LTX / Wan (video), Flux / SDXL / Pony / SD 1.5 (image). "
-                            '"None" = no JSON template (empty system unless override). '
-                            + JSON_PROMPTS_HINT
+                            "Skill / output format for the LLM system prompt. "
+                            '"None" = no Model_Skills template (empty system unless override). '
+                            + SKILLS_HINT
                         ),
                     },
                 ),
@@ -149,18 +151,14 @@ class LazyPromptEngineer:
                         "tooltip": "Injects location, lighting, and (for video) sound. Random uses env_seed.",
                     },
                 ),
-                "screenplay_mode": (
-                    "BOOLEAN",
-                    {
-                        "default": False,
-                        "tooltip": "LTX 2.3 only: screenplay-style character/scene/beats. Ignored for other targets.",
-                    },
-                ),
-                "creativity": ([
-                    "0.7 - Literal & Grounded",
-                    "0.9 - Balanced Professional",
-                    "1.1 - Artistic Expansion",
-                ], {"default": "0.9 - Balanced Professional", "tooltip": "Sampling temperature preset for local HF models and LM Studio."}),
+                "creativity": ("FLOAT", {
+                    "default": 0.9,
+                    "min": 0.1,
+                    "max": 1.0,
+                    "step": 0.1,
+                    "display": "number",
+                    "tooltip": "Sampling temperature (0.1–1.0, step 0.1) for local HF models and LM Studio. Values above 1.0 are not supported by LM Studio.",
+                }),
                 "seed": ("INT", {
                     "default": -1,
                     "min": -1,
@@ -169,7 +167,6 @@ class LazyPromptEngineer:
                     "display": "number",
                     "tooltip": "LLM seed. -1 = random each run.",
                 }),
-                "invent_dialogue": ("BOOLEAN", {"default": True, "tooltip": "Video targets: when ON, invent inline dialogue; when OFF, only quoted user dialogue or silence."}),
                 "keep_model_loaded": ("BOOLEAN", {"default": False, "tooltip": "Keep the local HF model in VRAM between runs. Off frees VRAM after each run."}),
                 "offline_mode": ("BOOLEAN", {"default": False, "tooltip": "ON = no HuggingFace network; local cache / paths only."}),
                 "video_length": ("FLOAT", {
@@ -178,15 +175,7 @@ class LazyPromptEngineer:
                     "max": 300.0,
                     "step": 0.25,
                     "display": "number",
-                    "tooltip": "Video duration in seconds (video targets). Frame count for hints = length × fps. Image targets ignore this.",
-                }),
-                "fps": ("INT", {
-                    "default": 0,
-                    "min": 0,
-                    "max": 60,
-                    "step": 1,
-                    "display": "number",
-                    "tooltip": "0 = auto from target model (Wan 16, LTX 25, else 24). Set >0 to override.",
+                    "tooltip": "Video duration in seconds. Injected into the LLM prompt for video skills. Image skills ignore this.",
                 }),
                 "env_seed": ("INT", {
                     "default": 0,
@@ -242,12 +231,13 @@ class LazyPromptEngineer:
                 "system_prompt": ("STRING", {
                     "default": "",
                     "multiline": True,
-                    "placeholder": "Leave empty = JSON template for target_model",
+                    "placeholder": "Leave empty = Model_Skills template for target_model",
                     "tooltip": (
-                        "Override system prompt. If empty, uses lazyprompt/system_prompts.json for the selected target. "
+                        "Optional full system override. Empty = selected skill's Model_Skills/*.md prompt. "
+                        "Does not merge with the MD body. "
                         "When target is None and this field has text, only that text is used as system prompt and the "
                         "user message is scene + idea only (no auto augmentation). "
-                        + JSON_PROMPTS_HINT
+                        + SKILLS_HINT
                     ),
                 }),
             },
@@ -290,6 +280,16 @@ class LazyPromptEngineer:
                         "(LM Studio API and local HF). Wire from Lazy-subject-and-scene-automation prompt_override."
                     ),
                 }),
+                "user_instructions": ("STRING", {
+                    "default": "",
+                    "forceInput": True,
+                    "multiline": True,
+                    "tooltip": (
+                        "Optional temporary instructions. When non-empty, injected between "
+                        "***UserPrompt*** / ***UserPromptEnd*** in the system prompt. "
+                        "Empty = block omitted (nothing passed)."
+                    ),
+                }),
             },
         }
 
@@ -305,7 +305,7 @@ class LazyPromptEngineer:
         "3B - Llama-3.2 Abliterated (Low VRAM)": "huihui-ai/Llama-3.2-3B-Instruct-abliterated",
     }
 
-    # Default target templates: lazyprompt/system_prompts.json (editable)
+    # Default target templates: lazyprompt/Model_Skills/*.md (editable)
 
     _PREAMBLE_RE = re.compile(
         r"^(Sure!?|Certainly!?|Absolutely!?|Of course!?|Here(?:'s| is).*?:|Great!?)[^\n]*\n?",
@@ -574,7 +574,7 @@ class LazyPromptEngineer:
     @staticmethod
     def _finalize_output(target_model: str, result: str, user_input: str) -> tuple:
         """Strip POSITIVE/NEGATIVE blocks for tag-style image targets; else scene-aware video neg."""
-        if any(x in target_model for x in ("SDXL", "Pony", "SD 1.5")):
+        if is_tag_style_model(target_model):
             pos, neg_img = split_positive_negative_block(result)
             neg = neg_img.strip() if neg_img.strip() else _GENERIC_IMAGE_NEG
             return pos, neg
@@ -870,20 +870,40 @@ class LazyPromptEngineer:
                 f"with the model loaded? Check the model name matches exactly."
             ) from e
 
+    @staticmethod
+    def _coerce_creativity(creativity) -> float:
+        """Accept float or legacy labeled string presets; clamp to 0.1–1.0."""
+        if isinstance(creativity, (int, float)):
+            value = float(creativity)
+        else:
+            text = str(creativity or "").strip()
+            legacy = {
+                "0.7 - Literal & Grounded": 0.7,
+                "0.9 - Balanced Professional": 0.9,
+                "1.1 - Artistic Expansion": 1.0,
+            }
+            if text in legacy:
+                value = legacy[text]
+            else:
+                try:
+                    value = float(text.split()[0])
+                except (ValueError, IndexError):
+                    value = 0.9
+        # Round to nearest 0.1 then clamp (LM Studio rejects > 1.0)
+        value = round(value * 10) / 10.0
+        return max(0.1, min(1.0, value))
+
     def generate(
         self,
         bypass,
         user_input,
         target_model,
         environment,
-        screenplay_mode,
         creativity,
         seed,
-        invent_dialogue,
         keep_model_loaded,
         offline_mode,
         video_length,
-        fps,
         env_seed,
         model,
         local_path_8b,
@@ -897,6 +917,11 @@ class LazyPromptEngineer:
         character="",
         image=None,
         prompt_override_input="",
+        user_instructions="",
+        # Legacy kwargs from older workflows (ignored)
+        screenplay_mode=False,
+        invent_dialogue=False,
+        fps=0,
     ):
         override_text = (prompt_override_input or "").strip()
         effective_user = override_text or (user_input or "").strip()
@@ -935,8 +960,6 @@ class LazyPromptEngineer:
             self.load_model(model_key=model, offline_mode=offline_mode, local_path=local_path)
 
         is_vid = is_video_model(target_model)
-        screen_use = bool(screenplay_mode and "LTX" in target_model)
-        fps_f = float(fps) if int(fps) > 0 else default_fps_for_target(target_model)
 
         # None target + system_prompt override and/or scenario prompt_override_input:
         # send only the user/override text to the LLM (no aug block, no user_tail injections).
@@ -947,11 +970,9 @@ class LazyPromptEngineer:
         max_tokens_actual = max(96, min(int(max_output_tokens), _ABS_MAX_OUTPUT_TOKENS))
         reply_target = max(32, max_tokens_actual // 3)
 
-        # --- Video: length in seconds × fps → frame count for LLM hints; beats from seconds ---
+        # --- Video: length in seconds only; beats derived from duration ---
         if is_vid:
             real_seconds = max(float(video_length), 0.25)
-            frame_count = int(round(real_seconds * fps_f))
-            frame_count = max(1, min(frame_count, 2000))
             action_count = max(1, min(10, round(real_seconds / 4)))
             if action_count == 1:
                 pacing_hint = (
@@ -983,11 +1004,10 @@ class LazyPromptEngineer:
             )
             print(
                 f"[LazyPrompt] Video tokens: ~{reply_target} pacing target / {max_tokens_actual} max new tokens "
-                f"(actions: {action_count}, length: {real_seconds:g}s, frames≈{frame_count}, fps: {fps_f:g})"
+                f"(actions: {action_count}, length: {real_seconds:g}s)"
             )
         else:
             real_seconds = 0.0
-            frame_count = 0
             action_count = 1
             min_tokens = max(
                 16,
@@ -1009,12 +1029,7 @@ class LazyPromptEngineer:
                 torch.cuda.manual_seed_all(seed)
 
         # --- Temperature ---
-        temp_map = {
-            "0.7 - Literal & Grounded":    0.7,
-            "0.9 - Balanced Professional": 0.9,
-            "1.1 - Artistic Expansion":    1.1,
-        }
-        temperature = temp_map[creativity]
+        temperature = self._coerce_creativity(creativity)
 
         # --- Build stop token list (HF path only) ---
         # This encodes every known role delimiter into actual token IDs so the
@@ -1178,38 +1193,7 @@ class LazyPromptEngineer:
         else:
             multi_instruction = ""
 
-        # --- Dialogue instruction (video targets only) ---
-        if not is_vid:
-            dialogue_instruction = ""
-        elif not has_person:
-            dialogue_instruction = ""  # no_person_instruction already covers this
-        elif invent_dialogue:
-            dialogue_instruction = (
-                "\n\n[DIALOGUE INSTRUCTION: Invent dialogue that fits this scene naturally. "
-                "Write it as inline prose woven into the action — NOT as a [DIALOGUE: ...] tag or bracketed block. "
-                "The spoken words sit inside the sentence with attribution and physical delivery, like a novel. "
-                "Examples: "
-                "'He leans back, satisfied, \"I think I\\'ll have to go back tomorrow for more,\" he chuckles, his eyes crinkling at the corners.' "
-                "'\"Don\\'t stop,\" she breathes, gripping the sheets, her voice barely above a whisper.' "
-                "If the scene is sexual or explicit, dialogue must reflect that — breathless, reactive, commanding. "
-                "Never write a bare floating quote. Never use [DIALOGUE: ...] tags. Dialogue is part of the prose, always.]"
-            )
-        else:
-            has_user_dialogue = bool(re.search(r'["\u201c\u201d]', effective_user))
-            if has_user_dialogue:
-                dialogue_instruction = (
-                    "\n\n[DIALOGUE INSTRUCTION: Use ONLY the dialogue the user provided — do not invent or add any additional spoken words. "
-                    "Place their exact words naturally in the scene as inline prose with attribution and delivery. "
-                    "Examples: 'She smiles, \"I\\'m so happy,\" her voice bright, eyes wide.' "
-                    "'\"I\\'m so happy,\" he whispers, pulling her close, his voice low.' "
-                    "Never use [DIALOGUE: ...] tags. Weave the words into the action as part of the prose.]"
-                )
-            else:
-                dialogue_instruction = (
-                    "\n\n[DIALOGUE INSTRUCTION: No dialogue in this scene. No spoken words. "
-                    "Weave ambient sound naturally into the prose instead — maximum 2 sounds active at any one time, "
-                    "woven in as descriptive prose, not as tags.]"
-                )
+        # Dialogue rules live in Model_Skills/*.md (e.g. LTX 2.3 Dialog) — no runtime invent_dialogue toggle.
 
         # --- Scene / subject / user direction (always in LLM user message) ---
         effective_input = compose_user_scene_input(
@@ -1238,10 +1222,8 @@ class LazyPromptEngineer:
             aug = build_prompt_augmentation(
                 target_model=target_model,
                 environment=environment,
-                frame_count=frame_count,
-                fps=fps_f,
+                video_length_sec=real_seconds if is_vid else 0.0,
                 seed=env_seed,
-                screenplay_mode=screen_use,
                 has_scene_context=has_visual_context,
             )
             if aug.strip():
@@ -1259,10 +1241,15 @@ class LazyPromptEngineer:
         else:
             lora_instruction = ""
 
-        # --- System prompt: override or JSON template for target_model ---
-        effective_system_prompt = (system_prompt.strip() if system_prompt else "") or get_system_prompt(
-            target_model, screen_use
+        # --- System prompt: override or Model_Skills template for target_model ---
+        base_system = (system_prompt.strip() if system_prompt else "") or get_system_prompt(
+            target_model
         )
+        effective_system_prompt = apply_user_prompt_injection(
+            base_system, user_instructions or ""
+        )
+        if (user_instructions or "").strip():
+            print("[LazyPrompt] user_instructions injected into ***UserPrompt*** block.")
 
         if minimal_llm:
             user_tail = ""
@@ -1271,7 +1258,6 @@ class LazyPromptEngineer:
                 sequence_instruction
                 + no_person_instruction
                 + multi_instruction
-                + dialogue_instruction
                 + explicit_instruction
                 + lora_instruction
                 + length_instruction

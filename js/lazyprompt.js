@@ -1,5 +1,5 @@
 /**
- * LazyPrompt — clear system_prompt override so the node uses auto templates per target_model.
+ * LazyPrompt — clear system_prompt override so the node uses Model_Skills templates per target_model.
  */
 import { app } from "../../scripts/app.js";
 
