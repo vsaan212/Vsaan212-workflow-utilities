@@ -17,6 +17,7 @@ Load an image from ComfyUI’s `input/` folder with optional **cover crop** to p
 | Widget | Default | Notes |
 |--------|---------|--------|
 | `image` | — | Combo + ComfyUI upload; lists images under `input/` (including subfolders) |
+| `workflow_role` | **Image2video First frame** | Role for global-selector gating: first frame / last frame / reference image |
 | `aspect_ratio` | **9:16 (Phone)** | 9:16, 16:9, 1:1, 4:5, 3:4, 4:3, 2:3, 21:9, or **Original (no crop)** |
 | `auto_crop` | ON | Cover-crop to the selected ratio; OFF passes the full image through |
 | `resize_by_megapixels` | OFF | When ON, Lanczos-scale the result to a megapixel target (multiple of **32**), same math as Comfy **ResolutionSelector** (`MP × 1024²`) |
@@ -24,6 +25,12 @@ Load an image from ComfyUI’s `input/` folder with optional **cover crop** to p
 | `offset_x` / `offset_y` | 0 | Pan position (−1…1). Updated live when you drag the preview; shown in the readout below the preview |
 | `zoom` | 1.0 | Zoom in from 1× (cover crop) up to 4×. Shrinks the crop window so you can trim dead space, then pan |
 | `flip_horizontal` | OFF | Mirror left ↔ right after crop (toggled from the preview toolbar) |
+
+### Optional input
+
+| Input | Notes |
+|-------|--------|
+| `global_selector_input` | STRING from [Lazy Global Selector](lazy-global-selector.md). When set, `IMAGE` is only emitted if `workflow_role` matches the mode (`T2V` → none; `I2V` → first; `FL2V` → first+last; `R2V` → reference). Otherwise returns `None` (skip load) so optional downstream sockets stay empty. Unwired selector → always emit (backwards compatible). |
 
 ## UI (browser extension)
 
@@ -39,7 +46,8 @@ The node includes a custom preview (`js/lazy_image_loader.js`):
 
 ## Wiring tips
 
-- **LazyPrompt — Vision Describe** or **Prompt Engineer** `image` (LM Studio): wire `IMAGE` from this node after cropping to phone or target ratio.
+- **Lazy Global Selector:** set `workflow_role`, wire `global_selector_input`, and leave all loaders connected — unused roles emit nothing.
+- **LazyPrompt — Vision Describe** or **Prompt Engineer** `first_frame` (LM Studio): wire `IMAGE` from this node after cropping to phone or target ratio.
 - **MiniMax H3 / Lazy MiniMax All-in-One:** turn on **`resize_by_megapixels`**, set aspect (e.g. 16:9) and megapixels (e.g. **0.98**), then wire **`width`** / **`height`** into the MiniMax conditioner and **`IMAGE`** into `first_frame` / refs.
 - **Load Image** replacement: use this node when you want framing control without a separate crop node.
 

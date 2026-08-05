@@ -42,8 +42,8 @@ Dropdown lists refresh when the node is created; use ComfyUI **`R`** after addin
 |-------|------|--------|
 | `model_high` | MODEL | **Required.** Primary model branch; receives merged LoRA stacks for the **high** slots. |
 | `clip_high` | CLIP | **Required.** Patched alongside `model_high`. |
-| `model_low` | MODEL | **Optional.** Low-noise branch for Wan-style dual stacks. Omit for single-model graphs. |
-| `clip_low` | CLIP | **Optional.** Pair with `model_low` for dual stacks; omit for single-model graphs. |
+| `model_low` | MODEL | **Optional.** Second model branch (Wan low-noise, or MiniMax R2V UNET). Passes through even if `clip_low` is unwired; Low LoRA slots still apply to this model. |
+| `clip_low` | CLIP | **Optional.** Pair with `model_low` for dual CLIP stacks; omit for single-CLIP graphs (MiniMax). |
 | `subject` | dropdown | `.txt` under `lazy_subject_scene_automation/SubjectFiles/` (recursive). |
 | `scenario` | dropdown | First scenario `.txt` under `lazy_subject_scene_automation/ScenarioFiles/` (recursive). |
 | `scenario_2` | dropdown | Second scenario `.txt` (same folder and format). Default `none`. Adds up to three more LoRA slots (A/B/C) after scenario 1. |
@@ -53,6 +53,7 @@ Dropdown lists refresh when the node is created; use ComfyUI **`R`** after addin
 | `randomize_subject_in_directory` | BOOLEAN | **OFF** (default): use the selected `subject` dropdown. **ON**: each queue randomly picks another `.txt` from the **same folder** as the selected subject (e.g. select `cast/alice` → random pick among all files in `SubjectFiles/cast/`). Reads from disk; ignores the live subject pane. |
 | `prepend_text` | STRING (optional, **socket only**) | Wired text prepended to the built prompt; empty if unconnected. |
 | `post_text` | STRING (optional, **socket only**) | Wired text after the subject block; empty if unconnected. |
+| `global_selector_input` | STRING (optional, **socket only**) | From [Lazy Global Selector](lazy-global-selector.md). Used as `[Workflow]` in the selector blob when subject/scenario files do not set `[Workflow]`. |
 
 ## Outputs
 
@@ -64,7 +65,7 @@ Dropdown lists refresh when the node is created; use ComfyUI **`R`** after addin
 | `clip_high` / `clip_low` | After the same stacks as the paired model outputs. |
 | `subject_description` | Raw subject-side description only (no prepend/post). |
 | `prompt_override` | **Prompt override output** — text from scenario `[Prompt]` blocks (scenario 1 and/or 2). Empty when files use `[desciption]` instead. Wire to LazyPrompt **prompt_override_input**. Not included in the main `prompt` output. |
-| `selector` | MiniMax / media routing blob for [Lazy MiniMax All-in-One](lazy-minimax-all-in-one.md). Built from `[Workflow]`, `[ReferenceImage1]`–`[ReferenceImage3]`, `[AudioReference]` in subject + scenario files (see below). Empty when those tags are absent. |
+| `selector` | MiniMax / media routing blob for [Lazy MiniMax All-in-One](lazy-minimax-all-in-one.md). Built from `[Workflow]`, `[ReferenceImage1]`–`[ReferenceImage5]`, `[AudioReference]` in subject + scenario files (see below). Empty when those tags are absent (unless `global_selector_input` supplies a mode). |
 
 ## LoRA application order
 
@@ -121,7 +122,7 @@ If there is only **one** path section before the description, that single LoRA i
 | `LoraHighC` / `LoraLowC` | Optional pair (slot C). |
 | `KeywordA` / `KeywordB` / `KeywordC` | Merged into `keywords` output. |
 | `Workflow` | Optional. MiniMax mode hint: `T2V` / `T2VA` / `I2V` / `I2VA` / `FL2V` / `R2V` (aliases normalized). Emitted on **`selector`**. Place **before** description / Prompt. |
-| `ReferenceImage1` / `ReferenceImage2` / `ReferenceImage3` | Optional paths under ComfyUI `input/` (e.g. `folder/image.png`). Emitted on **`selector`**. |
+| `ReferenceImage1` … `ReferenceImage5` | Optional paths under ComfyUI `input/` (e.g. `folder/image.png`). Emitted on **`selector`**. |
 | `AudioReference` | Optional audio path under `input/`. Emitted on **`selector`**. |
 | `description` or `desciption` | Subject description in the final `prompt`. |
 
@@ -179,7 +180,7 @@ If only **one** path section exists before the description, that LoRA is applied
 | `LoraHighB` / `LoraLowB` | Optional pair (slot B). |
 | `LoraHighC` / `LoraLowC` | Optional pair (slot C). |
 | `KeywordA` / `KeywordB` / `KeywordC` | Appended after subject keywords in `keywords`. |
-| `Workflow` / `ReferenceImage1`–`3` / `AudioReference` | Same MiniMax selector tags as subject files. Merged into **`selector`** (scenario non-empty values override subject; scenario 2 overrides scenario 1). |
+| `Workflow` / `ReferenceImage1`–`5` / `AudioReference` | Same MiniMax selector tags as subject files. Merged into **`selector`** (scenario non-empty values override subject; scenario 2 overrides scenario 1). |
 | `description` or `desciption` | Scenario text; appears after the subject block in `prompt`. |
 | `Prompt` | **Mutually exclusive with `description`/`desciption`.** Body is sent on **`prompt_override`** (for LazyPrompt LLM override), not in the main `prompt` output. If both tags exist, **`Prompt` wins**. Multiline bodies include all lines until the next **known** `[Tag]` section (lines with other `[brackets]` stay in the prompt). |
 

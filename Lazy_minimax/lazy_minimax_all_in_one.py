@@ -13,7 +13,6 @@ Thanks to Comfy-Org / ComfyUI for native H3 nodes
 from __future__ import annotations
 
 import os
-import re
 from typing import Any, Dict, List, Optional, Tuple
 
 import folder_paths
@@ -22,6 +21,12 @@ import numpy as np
 import torch
 from PIL import Image, ImageOps
 from comfy_api.latest import io
+
+from ..workflow_modes import (
+    normalize_workflow,
+    parse_selector_tagged,
+    resolve_mode_from_selector,
+)
 
 # Prefer core; fall back to vendored copy when Comfy < 0.30.
 try:
@@ -36,31 +41,11 @@ except Exception:
     )
 
 
-_WORKFLOW_ALIASES = {
-    "t2v": "T2V",
-    "t2va": "T2V",
-    "i2v": "I2V",
-    "i2va": "I2V",
-    "fl2v": "FL2V",
-    "fl": "FL2V",
-    "fl2va": "FL2V",
-    "flf2v": "FL2V",
-    "r2v": "R2V",
-    "ref2v": "R2V",
-    "ref2va": "R2V",
-}
-
-
 def seconds_to_h3_frames(seconds: float) -> int:
     """Workflow length snap: max(5, round(a*24)) aligned to 17k+5 grid."""
     a = float(seconds)
     base = max(5, int(round(a * 24)))
     return base + (5 - (base % 17)) % 17
-
-
-def normalize_workflow(raw: str) -> Optional[str]:
-    key = re.sub(r"[^a-z0-9]", "", (raw or "").lower())
-    return _WORKFLOW_ALIASES.get(key)
 
 
 def _strip_input_prefix(path: str) -> str:
@@ -71,33 +56,6 @@ def _strip_input_prefix(path: str) -> str:
     if low.startswith("input/"):
         p = p[6:]
     return p.strip().lstrip("/")
-
-
-def _parse_selector_tagged(text: str) -> Dict[str, str]:
-    """Parse a small tagged selector blob into {norm_tag: body}."""
-    text = (text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
-    if not text:
-        return {}
-    lines = text.split("\n")
-    out: Dict[str, str] = {}
-    i = 0
-    while i < len(lines):
-        m = re.match(r"^\[([^\]]+)\]\s*$", lines[i].strip())
-        if not m:
-            i += 1
-            continue
-        tag = re.sub(r"[^a-z0-9]", "", m.group(1).lower())
-        i += 1
-        body_lines: List[str] = []
-        while i < len(lines):
-            if re.match(r"^\[([^\]]+)\]\s*$", lines[i].strip()):
-                break
-            body_lines.append(lines[i])
-            i += 1
-        body = "\n".join(body_lines).strip()
-        if tag:
-            out[tag] = body
-    return out
 
 
 def _load_image_tensor(rel_path: str) -> Optional[torch.Tensor]:
@@ -290,8 +248,9 @@ class LazyMinimaxAllInOne(io.ComfyNode):
                     multiline=True,
                     default="",
                     tooltip=(
-                        "From Lazy-subject-and-scene-automation. Non-empty fields override "
-                        "sockets; forces ref_image_size=match."
+                        "Bare mode (T2V/I2V/FL2V/R2V) or tagged blob from "
+                        "Lazy-subject-and-scene-automation. Non-empty path fields override "
+                        "sockets; forces ref_image_size=match when tagged paths present."
                     ),
                 ),
                 io.Autogrow.Input(
@@ -376,14 +335,21 @@ class LazyMinimaxAllInOne(io.ComfyNode):
         length = seconds_to_h3_frames(duration_seconds)
         prompt = prompt if prompt is not None else ""
 
-        sel = _parse_selector_tagged(selector or "")
-        selector_active = bool((selector or "").strip())
+        selector_text = (selector or "").strip()
+        sel = parse_selector_tagged(selector_text)
+        # Tagged path overrides (not bare mode alone)
+        has_path_overrides = any(
+            (sel.get(f"referenceimage{i}", "") or "").strip() for i in range(1, 6)
+        ) or bool((sel.get("audioreference", "") or "").strip())
+        selector_active = has_path_overrides
 
-        sel_workflow = normalize_workflow(sel.get("workflow", ""))
+        sel_workflow = resolve_mode_from_selector(selector_text)
         ref_paths = [
             sel.get("referenceimage1", ""),
             sel.get("referenceimage2", ""),
             sel.get("referenceimage3", ""),
+            sel.get("referenceimage4", ""),
+            sel.get("referenceimage5", ""),
         ]
         audio_path = sel.get("audioreference", "")
 
@@ -407,6 +373,7 @@ class LazyMinimaxAllInOne(io.ComfyNode):
         if sel_audio is not None:
             ref_audios_d["ref_audio_0"] = sel_audio
 
+        # Dual-use: ReferenceImage1/2 also feed first/last for I2V/FL2V
         if sel_images[0] is not None:
             eff_first = sel_images[0]
         if sel_images[1] is not None:
@@ -424,6 +391,21 @@ class LazyMinimaxAllInOne(io.ComfyNode):
             mode = "I2V"
         else:
             mode = "T2V"
+
+        # Hard-gate sockets by resolved mode
+        if mode == "T2V":
+            eff_first, eff_last = None, None
+            ref_images_d, ref_videos_d, ref_video_audios_d, ref_audios_d = {}, {}, {}, {}
+            has_refs = False
+        elif mode == "I2V":
+            eff_last = None
+            ref_images_d, ref_videos_d, ref_video_audios_d, ref_audios_d = {}, {}, {}, {}
+            has_refs = False
+        elif mode == "FL2V":
+            ref_images_d, ref_videos_d, ref_video_audios_d, ref_audios_d = {}, {}, {}, {}
+            has_refs = False
+        elif mode == "R2V":
+            eff_first, eff_last = None, None
 
         if mode == "R2V":
             if audio_vae is None:

@@ -10,11 +10,11 @@ Requires **ComfyUI 0.30.0+** with MiniMax H3 installed. You still load the corre
 
 ## Mode selection
 
-1. If optional **`selector`** (from [Lazy-subject-and-scene-automation](lazy-subject-scene-automation.md)) contains `[Workflow]`, that wins (`T2V`/`T2VA`, `I2V`/`I2VA`, `FL2V`, `R2V`).
+1. If optional **`selector`** is a bare mode string (`T2V` / `I2V` / `FL2V` / `R2V`, aliases like `FFLF`→`FL2V`) or a tagged blob with `[Workflow]`, that wins.
 2. Else infer from wired / selector media: any reference image/video/audio → **R2V**; first+last → **FL2V**; first only → **I2V**; else → **T2V**.
 3. Empty prompt + no media → **T2V** with blank prompt (no error).
 
-When **`selector`** is non-empty, **`ref_image_size`** is forced to **`match`**.
+Sockets are hard-gated by the resolved mode (unused frames/refs are ignored even if wired). When the selector blob contains path overrides, **`ref_image_size`** is forced to **`match`**.
 
 ## Inputs
 
@@ -30,7 +30,7 @@ When **`selector`** is non-empty, **`ref_image_size`** is forced to **`match`**.
 | `ref_images` | Autogrow **0–9** reference images (R2V). Extra sockets appear as you connect. Prompt tags: `<Picture 1>`… |
 | `ref_videos` / `ref_video_audios` | Autogrow **0–3** reference videos + soundtracks. |
 | `ref_audios` | Autogrow **0–3** standalone reference audio. |
-| `selector` | Optional STRING from subject/scene automation. |
+| `selector` | Optional STRING: bare mode or tagged blob from subject/scene automation / Prompt Engineer. |
 
 ## Outputs
 
@@ -42,8 +42,9 @@ When **`selector`** is non-empty, **`ref_image_size`** is forced to **`match`**.
 
 ## Wiring with subject/scene automation
 
-1. Put `[Workflow]`, `[ReferenceImage1]`…`[ReferenceImage3]`, `[AudioReference]` in subject and/or scenario `.txt` files (before `[desciption]` / `[Prompt]`).
+1. Put `[Workflow]`, `[ReferenceImage1]`…`[ReferenceImage5]`, `[AudioReference]` in subject and/or scenario `.txt` files (before `[desciption]` / `[Prompt]`).
 2. Paths are relative to ComfyUI `input/` (e.g. `chars/hero.png` or `input/chars/hero.png`). Backslashes are fine on Windows.
-3. Wire automation **`selector`** → this node’s **`selector`**. Non-empty selector fields override sockets.
+3. Wire automation **`selector`** → this node’s **`selector`**, or a bare mode from [Lazy Global Selector](lazy-global-selector.md). Non-empty selector path fields override sockets.
+4. For UNET routing, wire mode → [Lazy Model Switcher](lazy-model-switcher.md).
 
 Audio files (`.wav` / etc.) are loaded via **soundfile** or stdlib **wave**, not torchcodec — Easy-Install embeds often hit a broken `libtorchcodec_core*.dll` entry-point error if torchaudio defaults to torchcodec.

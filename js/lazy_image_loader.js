@@ -285,6 +285,7 @@ function buildUi(node) {
         dragging: false,
         lastX: 0,
         lastY: 0,
+        suppressImageCb: false,
     };
 
     function targetRatio() {
@@ -368,17 +369,29 @@ function buildUi(node) {
 
     async function refreshImageList(selectName) {
         const names = await fetchImageList();
-        if (imageW.options) imageW.options.values = names;
-        if (selectName && names.includes(selectName)) {
-            setWidgetValue(node, "image", selectName);
+        state.suppressImageCb = true;
+        try {
+            if (imageW.options) imageW.options.values = names;
+            const keep = selectName || imageW.value;
+            if (keep && names.includes(keep)) {
+                imageW.value = keep;
+            } else if (names.length && !names.includes(imageW.value)) {
+                imageW.value = names[0];
+            }
+        } finally {
+            state.suppressImageCb = false;
         }
     }
 
+    let previewSeq = 0;
+
     async function loadPreview(filename) {
-        state.imgName = filename || "";
+        const name = (filename || "").trim();
+        const seq = ++previewSeq;
+        state.imgName = name;
         state.img = null;
         resizeFrame();
-        if (!filename) {
+        if (!name) {
             drawPreview();
             status.textContent = "";
             return;
@@ -387,16 +400,34 @@ function buildUi(node) {
         const img = new Image();
         img.crossOrigin = "anonymous";
         img.onload = () => {
+            // Ignore stale responses (combo changes / list refresh races).
+            if (seq !== previewSeq || state.imgName !== name) return;
             state.img = img;
-            status.textContent = `${filename} — ${img.width}×${img.height}`;
+            status.textContent = `${name} — ${img.width}×${img.height}`;
             drawPreview();
             node.setDirtyCanvas?.(true, true);
         };
         img.onerror = () => {
-            status.textContent = `Could not preview: ${filename}`;
+            if (seq !== previewSeq || state.imgName !== name) return;
+            status.textContent = `Could not preview: ${name}`;
             drawPreview();
         };
-        img.src = viewUrl(filename);
+        img.src = viewUrl(name);
+    }
+
+    function selectedImageName(explicit) {
+        if (explicit != null && explicit !== "") return String(explicit);
+        const w = widget(node, "image") || imageW;
+        return w?.value != null ? String(w.value) : "";
+    }
+
+    function syncPreviewFromWidget(explicit) {
+        const name = selectedImageName(explicit);
+        if (name === state.imgName && state.img) {
+            drawPreview();
+            return;
+        }
+        loadPreview(name);
     }
 
     async function handleFile(file) {
@@ -513,17 +544,24 @@ function buildUi(node) {
         });
     }
 
-    const onImageChange = () => {
+    const onImageChange = (explicit) => {
+        if (state.suppressImageCb) return;
         setWidgetValue(node, "offset_x", 0);
         setWidgetValue(node, "offset_y", 0);
         setWidgetValue(node, "zoom", 1);
-        loadPreview(imageW.value);
+        syncPreviewFromWidget(explicit);
     };
 
     const origImageCb = imageW.callback;
     imageW.callback = function (...args) {
         if (origImageCb) origImageCb.apply(this, args);
-        onImageChange();
+        // Prefer the value Comfy just applied (args[0] / this.value) — imageW.value
+        // can briefly lag or get reset to options[0] during list refresh.
+        const next =
+            args.length > 0 && args[0] != null && args[0] !== ""
+                ? args[0]
+                : this?.value;
+        onImageChange(next);
     };
 
     const origAspectCb = aspectW.callback;
@@ -542,8 +580,20 @@ function buildUi(node) {
         node.setDirtyCanvas?.(true, true);
     };
 
+    // Keep transform canvas aligned with the combo after workflow load / R refresh.
+    const syncIfStale = () => {
+        const current = selectedImageName();
+        if (current && current !== state.imgName) {
+            loadPreview(current);
+        }
+    };
+    node._lazyImageSyncPreview = syncIfStale;
+
     resizeFrame();
-    loadPreview(imageW.value);
+    // Defer initial load so widgets_values from the workflow are applied first.
+    queueMicrotask(() => syncPreviewFromWidget());
+    setTimeout(() => syncPreviewFromWidget(), 0);
+    setTimeout(() => syncPreviewFromWidget(), 100);
 
     return root;
 }
@@ -564,6 +614,22 @@ app.registerExtension({
                 getMaxHeight: () => 560,
             });
             node.setSize?.([Math.max(node.size?.[0] ?? 0, 300), Math.max(node.size?.[1] ?? 0, 560)]);
+            return r;
+        };
+
+        const origOnConfigure = nodeType.prototype.onConfigure;
+        nodeType.prototype.onConfigure = function (info) {
+            const r = origOnConfigure?.apply(this, arguments);
+            // After workflow JSON applies widget values, resync the crop preview.
+            queueMicrotask(() => this._lazyImageSyncPreview?.());
+            setTimeout(() => this._lazyImageSyncPreview?.(), 50);
+            return r;
+        };
+
+        const origOnDrawForeground = nodeType.prototype.onDrawForeground;
+        nodeType.prototype.onDrawForeground = function (...args) {
+            const r = origOnDrawForeground?.apply(this, args);
+            this._lazyImageSyncPreview?.();
             return r;
         };
     },

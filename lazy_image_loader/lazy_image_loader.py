@@ -11,6 +11,13 @@ from PIL import Image, ImageOps
 
 import folder_paths
 
+from ..workflow_modes import (
+    ROLE_FIRST_FRAME,
+    WORKFLOW_ROLES,
+    normalize_workflow,
+    role_enabled,
+)
+
 # width:height label → numeric width/height ratio
 ASPECT_RATIOS: dict[str, float | None] = {
     "9:16 (Phone)": 9 / 16,
@@ -159,6 +166,16 @@ class LazyImageLoader:
                     list_input_images(),
                     {"image_upload": True},
                 ),
+                "workflow_role": (
+                    list(WORKFLOW_ROLES),
+                    {
+                        "default": ROLE_FIRST_FRAME,
+                        "tooltip": (
+                            "Which MiniMax / Prompt Engineer role this loader feeds. "
+                            "Paired with global_selector_input to hard-gate the IMAGE output."
+                        ),
+                    },
+                ),
                 "aspect_ratio": (list(ASPECT_RATIOS.keys()), {"default": DEFAULT_ASPECT}),
                 "auto_crop": ("BOOLEAN", {"default": True}),
                 "resize_by_megapixels": (
@@ -216,7 +233,21 @@ class LazyImageLoader:
                     },
                 ),
                 "flip_horizontal": ("BOOLEAN", {"default": False}),
-            }
+            },
+            "optional": {
+                "global_selector_input": (
+                    "STRING",
+                    {
+                        "forceInput": True,
+                        "default": "",
+                        "multiline": False,
+                        "tooltip": (
+                            "From Lazy Global Selector. When set, IMAGE is only emitted if "
+                            "workflow_role matches the mode (else None — optional downstream)."
+                        ),
+                    },
+                ),
+            },
         }
 
     RETURN_TYPES = ("IMAGE", "INT", "INT")
@@ -228,23 +259,25 @@ class LazyImageLoader:
     def IS_CHANGED(
         cls,
         image,
-        aspect_ratio,
-        auto_crop,
-        resize_by_megapixels,
-        megapixels,
-        offset_x,
-        offset_y,
-        zoom,
-        flip_horizontal,
+        workflow_role=ROLE_FIRST_FRAME,
+        aspect_ratio=DEFAULT_ASPECT,
+        auto_crop=True,
+        resize_by_megapixels=False,
+        megapixels=DEFAULT_MEGAPIXELS,
+        offset_x=0.0,
+        offset_y=0.0,
+        zoom=1.0,
+        flip_horizontal=False,
+        global_selector_input="",
     ):
         return (
-            f"{image}|{aspect_ratio}|{auto_crop}|{bool(resize_by_megapixels)}"
+            f"{image}|{workflow_role}|{aspect_ratio}|{auto_crop}|{bool(resize_by_megapixels)}"
             f"|{float(megapixels):.2f}|{offset_x:.4f}|{offset_y:.4f}"
-            f"|{zoom:.4f}|{bool(flip_horizontal)}"
+            f"|{zoom:.4f}|{bool(flip_horizontal)}|{global_selector_input or ''}"
         )
 
     @classmethod
-    def VALIDATE_INPUTS(cls, image):
+    def VALIDATE_INPUTS(cls, image, **kwargs):
         if not image:
             return "Select or upload an image."
         if not folder_paths.exists_annotated_filepath(image):
@@ -254,15 +287,21 @@ class LazyImageLoader:
     def load_image(
         self,
         image: str,
-        aspect_ratio: str,
-        auto_crop: bool,
+        workflow_role: str = ROLE_FIRST_FRAME,
+        aspect_ratio: str = DEFAULT_ASPECT,
+        auto_crop: bool = True,
         resize_by_megapixels: bool = False,
         megapixels: float = DEFAULT_MEGAPIXELS,
         offset_x: float = 0.0,
         offset_y: float = 0.0,
         zoom: float = 1.0,
         flip_horizontal: bool = False,
+        global_selector_input: str = "",
     ):
+        mode = normalize_workflow(global_selector_input or "")
+        if not role_enabled(workflow_role, mode):
+            return (None, 0, 0)
+
         pil = load_pil_image(image)
         target_ratio = ASPECT_RATIOS.get(aspect_ratio)
 

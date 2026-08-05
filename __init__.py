@@ -1,4 +1,4 @@
-__version__ = "1.9.4"
+__version__ = "1.10.0"
 __author__ = "Vsaan212"
 __title__ = "Vsaan212 Workflow Utilities"
 # custom_nodes/vsaan212_workflow_utilities/__init__.py
@@ -144,6 +144,26 @@ except Exception:
     MM_CLASSES = {}
     MM_DISPLAY = {}
 
+# Lazy Global Selector (T2V / I2V / FL2V / R2V)
+try:
+    from .lazy_global_selector import (
+        NODE_CLASS_MAPPINGS as LGS_CLASSES,
+        NODE_DISPLAY_NAME_MAPPINGS as LGS_DISPLAY,
+    )
+except Exception:
+    LGS_CLASSES = {}
+    LGS_DISPLAY = {}
+
+# Lazy Model Switcher (FL2V vs R2V UNET)
+try:
+    from .lazy_model_switcher import (
+        NODE_CLASS_MAPPINGS as LMS_CLASSES,
+        NODE_DISPLAY_NAME_MAPPINGS as LMS_DISPLAY,
+    )
+except Exception:
+    LMS_CLASSES = {}
+    LMS_DISPLAY = {}
+
 # --- API routes for live folder scanning ---
 from aiohttp import web
 from server import PromptServer
@@ -239,3 +259,9 @@ NODE_DISPLAY_NAME_MAPPINGS.update(LIL_DISPLAY)
 
 NODE_CLASS_MAPPINGS.update(MM_CLASSES)
 NODE_DISPLAY_NAME_MAPPINGS.update(MM_DISPLAY)
+
+NODE_CLASS_MAPPINGS.update(LGS_CLASSES)
+NODE_DISPLAY_NAME_MAPPINGS.update(LGS_DISPLAY)
+
+NODE_CLASS_MAPPINGS.update(LMS_CLASSES)
+NODE_DISPLAY_NAME_MAPPINGS.update(LMS_DISPLAY)

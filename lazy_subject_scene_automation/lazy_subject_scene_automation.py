@@ -577,6 +577,8 @@ _MINIMAX_SELECTOR_TAGS = (
     "ReferenceImage1",
     "ReferenceImage2",
     "ReferenceImage3",
+    "ReferenceImage4",
+    "ReferenceImage5",
     "AudioReference",
 )
 
@@ -589,6 +591,7 @@ _WORKFLOW_NORMALIZE = {
     "fl": "FL2V",
     "fl2va": "FL2V",
     "flf2v": "FL2V",
+    "fflf": "FL2V",
     "r2v": "R2V",
     "ref2v": "R2V",
     "ref2va": "R2V",
@@ -1002,8 +1005,9 @@ class LazySubjectSceneAutomation:
                     "MODEL",
                     {
                         "tooltip": (
-                            "Optional low-noise model branch for Wan-style dual stacks. "
-                            "Leave unwired for single-model workflows."
+                            "Optional second MODEL branch (Wan low-noise, or MiniMax R2V UNET). "
+                            "Passed through even without clip_low — Low LoRA slots still apply "
+                            "to this model (clip_high is used only as the LoRA companion)."
                         ),
                     },
                 ),
@@ -1011,8 +1015,8 @@ class LazySubjectSceneAutomation:
                     "CLIP",
                     {
                         "tooltip": (
-                            "Optional low-noise CLIP branch. Wire with model_low for dual stacks; "
-                            "omit for single-model graphs."
+                            "Optional second CLIP for dual high/low stacks. "
+                            "Omit for single-CLIP graphs (e.g. MiniMax); model_low still passes through."
                         ),
                     },
                 ),
@@ -1035,6 +1039,18 @@ class LazySubjectSceneAutomation:
                         "tooltip": (
                             "Optional: wired post text after the subject block on main prompt, "
                             "and before scenario [Prompt] body on prompt_override."
+                        ),
+                    },
+                ),
+                "global_selector_input": (
+                    "STRING",
+                    {
+                        "default": "",
+                        "forceInput": True,
+                        "multiline": False,
+                        "tooltip": (
+                            "From Lazy Global Selector. Used as [Workflow] in the selector "
+                            "blob when subject/scenario files do not set [Workflow]."
                         ),
                     },
                 ),
@@ -1165,6 +1181,7 @@ class LazySubjectSceneAutomation:
             str(kwargs.get("randomize_subject_in_directory") or ""),
             str(kwargs.get("scenario_2_high_strength") or ""),
             str(kwargs.get("scenario_2_low_strength") or ""),
+            str(kwargs.get("global_selector_input") or ""),
         ]
         return "|".join(fingerprint + stable)
 
@@ -1183,6 +1200,7 @@ class LazySubjectSceneAutomation:
         clip_low=None,
         post_text: Optional[str] = None,
         prepend_text: Optional[str] = None,
+        global_selector_input: Optional[str] = None,
         subject_live: Optional[str] = None,
         scenario_live: Optional[str] = None,
         scenario_2_live: Optional[str] = None,
@@ -1239,8 +1257,13 @@ class LazySubjectSceneAutomation:
         lo = _merge_stacks(sl, cl, cl2)
 
         model_h, clip_h = _apply_stack(model_high, clip_high, hi)
-        if model_low is not None and clip_low is not None:
-            model_l, clip_l = _apply_stack(model_low, clip_low, lo)
+        if model_low is not None:
+            # MiniMax / single-CLIP graphs wire R2V (or low UNET) on model_low without
+            # a second CLIP. Still apply Low LoRA slots to the model; use clip_high as
+            # the LoraLoader companion and leave clip_low output empty when unwired.
+            clip_for_low = clip_low if clip_low is not None else clip_high
+            model_l, clip_l_applied = _apply_stack(model_low, clip_for_low, lo)
+            clip_l = clip_l_applied if clip_low is not None else None
         else:
             model_l, clip_l = None, None
 
@@ -1257,13 +1280,21 @@ class LazySubjectSceneAutomation:
             prompt_override = _build_prompt(pre, post, "", prompt_override)
         keywords = _format_keywords(skw, ckw, ckw2)
 
-        selector = _format_minimax_selector(
-            _merge_minimax_selector_fields(
-                _minimax_fields_from_content(subj_raw),
-                _minimax_fields_from_content(scen_raw),
-                _minimax_fields_from_content(scen2_raw),
-            )
+        fields = _merge_minimax_selector_fields(
+            _minimax_fields_from_content(subj_raw),
+            _minimax_fields_from_content(scen_raw),
+            _minimax_fields_from_content(scen2_raw),
         )
+        # File [Workflow] wins; else fall back to global selector mode.
+        if not (fields.get("Workflow") or "").strip():
+            gw = _normalize_workflow_value(
+                (global_selector_input or "").strip().splitlines()[0]
+                if (global_selector_input or "").strip()
+                else ""
+            )
+            if gw:
+                fields["Workflow"] = gw
+        selector = _format_minimax_selector(fields)
 
         if preview_err:
             err_hdr = "[Lazy automation load error]\n" + "\n".join(preview_err) + "\n"

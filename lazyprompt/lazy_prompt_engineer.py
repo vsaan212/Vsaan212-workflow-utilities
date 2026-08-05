@@ -40,6 +40,148 @@ from .system_prompts import (
     is_tag_style_model,
     is_video_model,
 )
+from ..workflow_modes import (
+    parse_selector_tagged,
+    resolve_mode_from_selector,
+)
+
+import folder_paths
+
+
+def _strip_input_prefix(path: str) -> str:
+    p = (path or "").strip().replace("\\", "/")
+    while p.startswith("./"):
+        p = p[2:]
+    low = p.lower()
+    if low.startswith("input/"):
+        p = p[6:]
+    return p.strip().lstrip("/")
+
+
+def _load_image_tensor_from_input(rel_path: str):
+    """Load IMAGE tensor from Comfy input/ path, or None."""
+    rel = _strip_input_prefix(rel_path)
+    if not rel:
+        return None
+    try:
+        full = folder_paths.get_annotated_filepath(rel)
+    except Exception:
+        full = os.path.join(folder_paths.get_input_directory(), rel)
+    if not full or not os.path.isfile(full):
+        return None
+    try:
+        img = PILImage.open(full)
+        from PIL import ImageOps
+
+        img = ImageOps.exif_transpose(img).convert("RGB")
+        arr = np.array(img).astype(np.float32) / 255.0
+        return torch.from_numpy(arr)[None,]
+    except Exception:
+        return None
+
+
+def _load_audio_dict_from_input(rel_path: str):
+    """Load Comfy AUDIO dict from input/ without torchcodec when possible."""
+    rel = _strip_input_prefix(rel_path)
+    if not rel:
+        return None
+    try:
+        full = folder_paths.get_annotated_filepath(rel)
+    except Exception:
+        full = os.path.join(folder_paths.get_input_directory(), rel)
+    if not full or not os.path.isfile(full):
+        return None
+
+    def _to_dict(waveform, sample_rate: int):
+        if waveform.dim() == 1:
+            waveform = waveform.unsqueeze(0)
+        if waveform.dim() == 2:
+            waveform = waveform.unsqueeze(0)
+        return {"waveform": waveform.contiguous().float(), "sample_rate": int(sample_rate)}
+
+    try:
+        import soundfile as sf
+
+        data, sr = sf.read(full, dtype="float32", always_2d=True)
+        return _to_dict(torch.from_numpy(data.T.copy()), sr)
+    except Exception:
+        pass
+    try:
+        import wave
+
+        with wave.open(full, "rb") as wf:
+            sr = wf.getframerate()
+            n_ch = wf.getnchannels()
+            sw = wf.getsampwidth()
+            raw = wf.readframes(wf.getnframes())
+        if sw == 2:
+            arr = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
+        elif sw == 4:
+            arr = np.frombuffer(raw, dtype=np.int32).astype(np.float32) / 2147483648.0
+        elif sw == 1:
+            arr = (np.frombuffer(raw, dtype=np.uint8).astype(np.float32) - 128.0) / 128.0
+        else:
+            return None
+        if n_ch > 1:
+            arr = arr.reshape(-1, n_ch).T
+        else:
+            arr = arr.reshape(1, -1)
+        return _to_dict(torch.from_numpy(arr.copy()), sr)
+    except Exception:
+        pass
+    try:
+        import torchaudio
+
+        try:
+            waveform, sr = torchaudio.load(full, backend="soundfile")
+        except TypeError:
+            try:
+                torchaudio.set_audio_backend("soundfile")
+            except Exception:
+                pass
+            waveform, sr = torchaudio.load(full)
+        return _to_dict(waveform, sr)
+    except Exception:
+        return None
+
+
+def _gate_media_for_mode(
+    mode: str | None,
+    first_frame=None,
+    last_frame=None,
+    refs=None,
+    audio=None,
+    *,
+    sas_override: bool = False,
+):
+    """Return gated (first, last, refs[5], audio) for mode. Empty mode → pass through."""
+    refs = list(refs or [None] * 5)
+    while len(refs) < 5:
+        refs.append(None)
+    refs = refs[:5]
+
+    if sas_override or mode:
+        # When mode known (or SAS active with resolved mode), apply hard gates.
+        m = mode
+        if not m:
+            # SAS blob with paths but no Workflow: infer
+            if any(r is not None for r in refs) or audio is not None:
+                m = "R2V"
+            elif first_frame is not None and last_frame is not None:
+                m = "FL2V"
+            elif first_frame is not None:
+                m = "I2V"
+            else:
+                m = "T2V"
+        if m == "T2V":
+            return None, None, [None] * 5, None, m
+        if m == "I2V":
+            return first_frame, None, [None] * 5, None, m
+        if m == "FL2V":
+            return first_frame, last_frame, [None] * 5, None, m
+        if m == "R2V":
+            return None, None, refs, audio, m
+    return first_frame, last_frame, refs, audio, mode
 
 
 def _comfy_image_to_jpeg_data_url(image_tensor, max_side: int = 768) -> str:
@@ -189,7 +331,15 @@ class LazyPromptEngineer:
                     "8B - NeuralDaredevil (High Quality)",
                     "3B - Llama-3.2 Abliterated (Low VRAM)",
                     "LM Studio (API)",
-                ], {"default": "LM Studio (API)", "tooltip": "Backend LLM: local HF checkpoints or LM Studio REST API (native /api/v1/chat with OpenAI fallback)."}),
+                    "TextGenerate (CLIP)",
+                ], {
+                    "default": "LM Studio (API)",
+                    "tooltip": (
+                        "Backend: local HF checkpoints, LM Studio REST API, or Comfy core "
+                        "TextGenerate via a wired CLIP/LLM (Qwen etc.). "
+                        "TextGenerate requires the optional clip input."
+                    ),
+                }),
                 "local_path_8b": ("STRING", {
                     "default": "",
                     "multiline": False,
@@ -223,7 +373,8 @@ class LazyPromptEngineer:
                     "step": 16,
                     "display": "number",
                     "tooltip": (
-                        "Hard cap on completion length (HF max_new_tokens / LM Studio max_tokens). "
+                        "Hard cap on completion length (HF max_new_tokens / LM Studio max_tokens / "
+                        "TextGenerate max_length). "
                         "The pacing hint asks the model for ~one-third of this many tokens by default — "
                         "raise both together for longer prompts (e.g. 1500 max → ~500 target)."
                     ),
@@ -240,8 +391,20 @@ class LazyPromptEngineer:
                         + SKILLS_HINT
                     ),
                 }),
+                "textgenerate_thinking": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": (
+                        "TextGenerate (CLIP) only: enable thinking mode when the wired LLM supports it."
+                    ),
+                }),
             },
             "optional": {
+                "clip": ("CLIP", {
+                    "tooltip": (
+                        "Required for TextGenerate (CLIP) backend. Wire CLIPLoader with an LLM-capable "
+                        "encoder (e.g. Qwen, type minimax / qwen). Plain SD CLIP will fail — needs .generate()."
+                    ),
+                }),
                 "scene_context": ("STRING", {
                     "default": "",
                     "multiline": True,
@@ -264,11 +427,43 @@ class LazyPromptEngineer:
                         "Wire from Lazy-subject-and-scene-automation subject_description."
                     ),
                 }),
+                "first_frame": ("IMAGE", {
+                    "tooltip": (
+                        "Image2video First frame. Vision for LM Studio or TextGenerate (CLIP) when gated on. "
+                        "Also accepted via legacy `image` input."
+                    ),
+                }),
                 "image": ("IMAGE", {
                     "tooltip": (
-                        "Optional. For use with LM Studio (API) and a vision-enabled model loaded in LM Studio. "
-                        "Sends this frame as an image alongside your text (OpenAI-style multimodal chat). "
-                        "Ignored when using local Hugging Face text-only models — use LazyPrompt — Vision Describe + scene_context instead."
+                        "Legacy alias for Image2video First frame. Prefer first_frame."
+                    ),
+                }),
+                "last_frame": ("IMAGE", {
+                    "tooltip": "Image2video Last frame (FL2V).",
+                }),
+                "reference_image_1": ("IMAGE", {"tooltip": "Reference Image 1 (R2V)."}),
+                "reference_image_2": ("IMAGE", {"tooltip": "Reference Image 2 (R2V)."}),
+                "reference_image_3": ("IMAGE", {"tooltip": "Reference Image 3 (R2V)."}),
+                "reference_image_4": ("IMAGE", {"tooltip": "Reference Image 4 (R2V)."}),
+                "reference_image_5": ("IMAGE", {"tooltip": "Reference Image 5 (R2V)."}),
+                "reference_audio": ("AUDIO", {
+                    "tooltip": "Reference audio passthrough (R2V). Switchable by global selector.",
+                }),
+                "global_selector_input": ("STRING", {
+                    "default": "",
+                    "forceInput": True,
+                    "multiline": False,
+                    "tooltip": "From Lazy Global Selector (T2V/I2V/FL2V/R2V). Gates image/audio sockets.",
+                }),
+                "SAS_automation_selector_input": ("STRING", {
+                    "default": "",
+                    "forceInput": True,
+                    "multiline": True,
+                    "tooltip": (
+                        "From Lazy-subject-and-scene-automation selector. Mode tags always apply. "
+                        "Direct image/audio sockets are ignored only when the blob includes "
+                        "ReferenceImage/AudioReference paths (disk load). Workflow-only blobs "
+                        "keep wired Lazy Image Loader frames."
                     ),
                 }),
                 "prompt_override_input": ("STRING", {
@@ -293,8 +488,34 @@ class LazyPromptEngineer:
             },
         }
 
-    RETURN_TYPES = ("STRING", "STRING", "STRING")
-    RETURN_NAMES = ("PROMPT", "PREVIEW", "NEG_PROMPT")
+    RETURN_TYPES = (
+        "STRING",
+        "STRING",
+        "STRING",
+        "STRING",
+        "IMAGE",
+        "IMAGE",
+        "IMAGE",
+        "IMAGE",
+        "IMAGE",
+        "IMAGE",
+        "IMAGE",
+        "AUDIO",
+    )
+    RETURN_NAMES = (
+        "PROMPT",
+        "PREVIEW",
+        "NEG_PROMPT",
+        "selector_Out",
+        "first_frame",
+        "last_frame",
+        "reference_image_1",
+        "reference_image_2",
+        "reference_image_3",
+        "reference_image_4",
+        "reference_image_5",
+        "reference_audio",
+    )
     FUNCTION = "generate"
     CATEGORY = "vsaan212/LazyPrompt"
 
@@ -893,6 +1114,125 @@ class LazyPromptEngineer:
         value = round(value * 10) / 10.0
         return max(0.1, min(1.0, value))
 
+    def _generate_via_textgenerate_clip(
+        self,
+        clip,
+        system_prompt: str,
+        user_text: str,
+        *,
+        image=None,
+        audio=None,
+        max_length: int = 512,
+        temperature: float = 0.7,
+        seed: int = 0,
+        thinking: bool = False,
+    ) -> str:
+        """Comfy core TextGenerate path: CLIP.tokenize → generate → decode."""
+        if clip is None:
+            raise ValueError(
+                "[LazyPrompt] TextGenerate (CLIP) requires a CLIP input. "
+                "Wire CLIPLoader with an LLM-capable model (e.g. Qwen)."
+            )
+
+        combined = (
+            f"{(system_prompt or '').strip()}\n\n"
+            f"{(user_text or '').strip()}\n"
+        ).strip()
+        if not combined:
+            combined = " "
+
+        try:
+            from comfy_extras.nodes_textgen import TextGenerate
+
+            sampling_mode = {
+                "sampling_mode": "on",
+                "temperature": float(temperature),
+                "top_k": 64,
+                "top_p": 0.95,
+                "min_p": 0.05,
+                "repetition_penalty": 1.05,
+                "seed": int(seed) if seed is not None and int(seed) >= 0 else 0,
+                "presence_penalty": 0.0,
+            }
+            result = TextGenerate.execute(
+                clip,
+                combined,
+                int(max_length),
+                sampling_mode,
+                image=image,
+                thinking=bool(thinking),
+                use_default_template=False,
+                video=None,
+                audio=audio,
+            )
+            if hasattr(result, "args") and result.args is not None and len(result.args) >= 1:
+                text = result.args[0]
+            elif isinstance(result, (tuple, list)) and len(result) >= 1:
+                text = result[0]
+            else:
+                text = result
+            print("[LazyPrompt] TextGenerate (CLIP) via comfy_extras.nodes_textgen.TextGenerate.")
+            return (text or "").strip() if isinstance(text, str) else str(text).strip()
+        except ImportError:
+            pass
+        except Exception as e:
+            print(
+                f"[LazyPrompt] TextGenerate.execute failed ({e}); "
+                "falling back to clip.tokenize/generate/decode."
+            )
+
+        try:
+            tokens = clip.tokenize(
+                combined,
+                image=image,
+                skip_template=True,
+                min_length=1,
+                thinking=bool(thinking),
+                video=None,
+                audio=audio,
+            )
+        except TypeError:
+            try:
+                tokens = clip.tokenize(
+                    combined, image=image, skip_template=True, min_length=1
+                )
+            except TypeError:
+                tokens = clip.tokenize(combined, image=image)
+
+        gen_seed = int(seed) if seed is not None and int(seed) >= 0 else None
+        try:
+            generated_ids = clip.generate(
+                tokens,
+                do_sample=True,
+                max_length=int(max_length),
+                temperature=float(temperature),
+                top_k=64,
+                top_p=0.95,
+                min_p=0.05,
+                repetition_penalty=1.05,
+                presence_penalty=0.0,
+                seed=gen_seed,
+            )
+        except TypeError:
+            generated_ids = clip.generate(
+                tokens,
+                do_sample=True,
+                max_length=int(max_length),
+                temperature=float(temperature),
+                top_k=64,
+                top_p=0.95,
+                seed=gen_seed,
+            )
+        except AttributeError as e:
+            raise RuntimeError(
+                "[LazyPrompt] Wired CLIP does not support text generation (.generate). "
+                "Load an LLM-capable encoder (Qwen / Gemma / LLaMA), not a plain SD CLIP."
+            ) from e
+
+        text = clip.decode(generated_ids)
+        print("[LazyPrompt] TextGenerate (CLIP) via clip.tokenize/generate/decode.")
+        return (text or "").strip() if isinstance(text, str) else str(text).strip()
+
     def generate(
         self,
         bypass,
@@ -912,10 +1252,22 @@ class LazyPromptEngineer:
         lm_studio_ttl,
         max_output_tokens,
         system_prompt,
+        textgenerate_thinking=False,
+        clip=None,
         scene_context="",
         lora_triggers="",
         character="",
+        first_frame=None,
         image=None,
+        last_frame=None,
+        reference_image_1=None,
+        reference_image_2=None,
+        reference_image_3=None,
+        reference_image_4=None,
+        reference_image_5=None,
+        reference_audio=None,
+        global_selector_input="",
+        SAS_automation_selector_input="",
         prompt_override_input="",
         user_instructions="",
         # Legacy kwargs from older workflows (ignored)
@@ -933,19 +1285,111 @@ class LazyPromptEngineer:
         if character_text:
             print("[LazyPrompt] character (subject) prepended to LLM user message.")
 
+        # ── Media gating (global selector / SAS disk override) ────────────────
+        sas_blob = (SAS_automation_selector_input or "").strip()
+        sel = parse_selector_tagged(sas_blob) if sas_blob else {}
+        # Only override direct IMAGE/AUDIO sockets when the blob carries media paths.
+        # A Workflow-only blob (common when Global Selector → SAS → PE) must NOT
+        # discard wired Lazy Image Loader frames — that was dropping LM Studio vision.
+        sas_path_override = any(
+            (sel.get(f"referenceimage{i}", "") or "").strip() for i in range(1, 6)
+        ) or bool((sel.get("audioreference", "") or "").strip())
+
+        mode = resolve_mode_from_selector(sas_blob) if sas_blob else None
+        if not mode:
+            mode = resolve_mode_from_selector(global_selector_input or "")
+
+        if sas_path_override:
+            print(
+                "[LazyPrompt] SAS selector has ReferenceImage/AudioReference paths — "
+                "loading media from disk; ignoring direct image/audio sockets."
+            )
+            ff = _load_image_tensor_from_input(sel.get("referenceimage1", ""))
+            lf = _load_image_tensor_from_input(sel.get("referenceimage2", ""))
+            refs = [
+                _load_image_tensor_from_input(sel.get(f"referenceimage{i}", ""))
+                for i in range(1, 6)
+            ]
+            audio = _load_audio_dict_from_input(sel.get("audioreference", ""))
+            if mode in ("I2V", "FL2V", None):
+                if ff is None and refs[0] is not None:
+                    ff = refs[0]
+                if lf is None and refs[1] is not None:
+                    lf = refs[1]
+            out_first, out_last, out_refs, out_audio, mode = _gate_media_for_mode(
+                mode, ff, lf, refs, audio, sas_override=True
+            )
+        else:
+            ff = first_frame if first_frame is not None else image
+            refs = [
+                reference_image_1,
+                reference_image_2,
+                reference_image_3,
+                reference_image_4,
+                reference_image_5,
+            ]
+            out_first, out_last, out_refs, out_audio, mode = _gate_media_for_mode(
+                mode, ff, last_frame, refs, reference_audio, sas_override=False
+            )
+            if sas_blob and not sas_path_override:
+                print(
+                    "[LazyPrompt] SAS selector has mode/tags but no media paths — "
+                    f"using direct sockets (first_frame={'yes' if ff is not None else 'no'})."
+                )
+
+        if not mode:
+            # Infer from what survived / was provided
+            if any(r is not None for r in out_refs) or out_audio is not None:
+                mode = "R2V"
+            elif out_first is not None and out_last is not None:
+                mode = "FL2V"
+            elif out_first is not None:
+                mode = "I2V"
+            else:
+                mode = "T2V" if (global_selector_input or sas_blob) else ""
+
+        selector_out = mode or resolve_mode_from_selector(global_selector_input or "") or ""
+
+        def _pack(prompt_text, preview_text, neg_text):
+            return (
+                prompt_text,
+                preview_text,
+                neg_text,
+                selector_out,
+                out_first,
+                out_last,
+                out_refs[0],
+                out_refs[1],
+                out_refs[2],
+                out_refs[3],
+                out_refs[4],
+                out_audio,
+            )
+
+        vision_image = out_first
+        if vision_image is None and mode == "R2V":
+            vision_image = next((r for r in out_refs if r is not None), None)
+
         # ── Bypass mode — no model loaded, input passed straight through ────────
         if bypass:
             print("[LazyPrompt] Bypass ON — skipping model, passing user_input directly.")
             neg_prompt = _build_negative_prompt("", effective_user)
-            return (effective_user, effective_user, neg_prompt)
+            return _pack(effective_user, effective_user, neg_prompt)
 
         use_lm_studio = model == "LM Studio (API)"
-        if image is not None and not use_lm_studio:
+        use_textgenerate = model == "TextGenerate (CLIP)"
+        if vision_image is not None and not use_lm_studio and not use_textgenerate:
             print(
-                "[LazyPrompt] IMAGE input is only sent to LM Studio (API) with a vision-capable model. "
-                "Switch backend to LM Studio, or use scene_context from LazyPrompt — Vision Describe."
+                "[LazyPrompt] IMAGE input is sent with LM Studio (API) or TextGenerate (CLIP). "
+                "Switch backend, or use scene_context from LazyPrompt — Vision Describe."
             )
-        if use_lm_studio:
+        if use_textgenerate:
+            if clip is None:
+                raise ValueError(
+                    "[LazyPrompt] When using TextGenerate (CLIP), wire an LLM-capable CLIP "
+                    "into the clip input (CLIPLoader → Qwen / Gemma / etc.)."
+                )
+        elif use_lm_studio:
             if not (lm_studio_model and lm_studio_model.strip()):
                 raise ValueError(
                     "[LazyPrompt] When using LM Studio (API), enter the model name in the "
@@ -1034,7 +1478,7 @@ class LazyPromptEngineer:
         # --- Build stop token list (HF path only) ---
         # This encodes every known role delimiter into actual token IDs so the
         # model hard-stops before it can write "assistant" or any turn boundary.
-        if not use_lm_studio:
+        if not use_lm_studio and not use_textgenerate:
             stop_token_ids = self._build_stop_token_ids()
 
         # --- Content tier detection ---
@@ -1217,7 +1661,7 @@ class LazyPromptEngineer:
             )
         else:
             has_visual_context = bool(scene_context and scene_context.strip()) or (
-                use_lm_studio and image is not None
+                (use_lm_studio or use_textgenerate) and vision_image is not None
             )
             aug = build_prompt_augmentation(
                 target_model=target_model,
@@ -1263,9 +1707,9 @@ class LazyPromptEngineer:
                 + length_instruction
             )
         user_text = effective_input + user_tail
-        if use_lm_studio and image is not None:
+        if use_lm_studio and vision_image is not None:
             try:
-                data_url = _comfy_image_to_jpeg_data_url(image)
+                data_url = _comfy_image_to_jpeg_data_url(vision_image)
             except Exception as e:
                 raise RuntimeError(
                     f"[LazyPrompt] Failed to encode IMAGE for LM Studio: {e}"
@@ -1287,6 +1731,24 @@ class LazyPromptEngineer:
                 {"role": "user", "content": user_text},
             ]
 
+        # ── TextGenerate (CLIP) path: Comfy core Generate Text ────────────────
+        if use_textgenerate:
+            tg_seed = int(seed) if seed is not None and int(seed) >= 0 else 0
+            result = self._generate_via_textgenerate_clip(
+                clip,
+                effective_system_prompt,
+                user_text,
+                image=vision_image,
+                audio=out_audio if mode == "R2V" else None,
+                max_length=max_tokens_actual,
+                temperature=temperature,
+                seed=tg_seed,
+                thinking=bool(textgenerate_thinking),
+            )
+            result = self._clean_output(result)
+            result, neg_prompt = self._finalize_output(target_model, result, effective_user)
+            return _pack(result, result, neg_prompt)
+
         # ── LM Studio path: API call then same post-process ───────────────────
         if use_lm_studio:
             result = self._generate_via_lm_studio(
@@ -1299,7 +1761,7 @@ class LazyPromptEngineer:
             )
             result = self._clean_output(result)
             result, neg_prompt = self._finalize_output(target_model, result, effective_user)
-            return (result, result, neg_prompt)
+            return _pack(result, result, neg_prompt)
 
         # ── HuggingFace path: tokenize, generate, decode ──────────────────────
         # apply_chat_template returns different types depending on the
@@ -1363,7 +1825,7 @@ class LazyPromptEngineer:
         if not keep_model_loaded:
             self.unload_model()
 
-        return (result, result, neg_prompt)
+        return _pack(result, result, neg_prompt)
 
 
 # ── ComfyUI boilerplate ──────────────────────────────────────────────────────

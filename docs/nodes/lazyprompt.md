@@ -14,7 +14,9 @@ Three related nodes for LLM-assisted prompting inside ComfyUI.
 
 ## LazyPrompt — Prompt Engineer
 
-**Purpose:** Expand a short user idea into a long-form prompt tuned for a **target skill** (LTX Video, Wan, Flux, SDXL, Pony, SD 1.5, plus Dialog / Screenplay variants).
+**Purpose:** Expand a short user idea into a long-form prompt tuned for a **target skill** (LTX Video, Wan, **MiniMax H3 I2V / FL2V / R2V**, Flux, SDXL, Pony, SD 1.5, plus Dialog / Screenplay variants).
+
+Backends: local HF (8B/3B), **LM Studio (API)**, or **TextGenerate (CLIP)** — Comfy core Generate Text via a wired LLM-capable CLIP (e.g. Qwen). Wire `clip` when using that backend; gated `first_frame` is passed as vision when present.
 
 ### Workflow wiring
 
@@ -24,9 +26,9 @@ Three related nodes for LLM-assisted prompting inside ComfyUI.
 4. Optional **`scene_context`** — connect text from **Vision Describe** or any frame/scene description.
 5. Optional **`prompt_override_input`** — when wired/non-empty, **replaces `user_input`** for the LLM request (LM Studio API and local HF). Typical source: **`prompt_override`** from **Lazy-subject-and-scene-automation** when the scenario file uses a **`[Prompt]`** block instead of **`[desciption]`**.
 6. Optional **`user_instructions`** — temporary instructions injected into `***UserPrompt***` markers in the system prompt (empty = block omitted).
-7. Optional **`image`** — **LM Studio only**, when using a **vision** model in LM Studio: start frame or reference is sent as JPEG in an OpenAI-style chat (same general pattern as ComfyExpo LM Studio nodes). **Ignored** for local 8B/3B Transformers backends; use Vision Describe → `scene_context` instead.
+7. Optional media — **`first_frame`** (legacy alias **`image`**), **`last_frame`**, **`reference_image_1`…`5`**, **`reference_audio`**. Gate with **`global_selector_input`**. **`SAS_automation_selector_input`**: mode from `[Workflow]` always applies; direct image/audio sockets are ignored **only** when the blob has `[ReferenceImage*]` / `[AudioReference]` paths (loaded from disk). A Workflow-only SAS blob keeps wired Image Loader frames. **LM Studio vision** uses the gated first frame (or first ref for R2V). Local HF backends ignore images — use Vision Describe → `scene_context`.
 8. **`bypass`** ON skips the LLM and passes the effective user text through (override if connected, else **`user_input`**).
-9. Outputs: **`PROMPT`** (use for encoding), **`PREVIEW`** (duplicate for UI), **`NEG_PROMPT`** (where the stack splits negatives for SDXL/Pony/SD1.5 tag formats).
+9. Outputs: **`PROMPT`**, **`PREVIEW`**, **`NEG_PROMPT`**, **`selector_Out`**, plus gated **`first_frame` / `last_frame` / refs / `reference_audio`** for MiniMax wiring.
 
 ### Operational tips
 
@@ -73,7 +75,7 @@ Wire it after your generation branch (or run manually) when you no longer need t
 `Load Image` → **Vision Describe** → `scene_context` string → **Prompt Engineer** → CLIP / KSampler.
 
 **Video + LM Studio vision**  
-`Load Image` (start frame) → **Prompt Engineer** `image` pin + LM Studio model → expanded prompt → video model conditioning.
+`Load Image` / Lazy Image Loader (start frame) → **Prompt Engineer** `first_frame` + LM Studio model → expanded prompt → video model conditioning. Wire [Lazy Global Selector](lazy-global-selector.md) so unused media sockets stay empty.
 
 **Static library only**  
 Use [Lazy Prompt Saver](lazy-prompt-saver.md) instead of Prompt Engineer when you do not need an LLM.
