@@ -1,4 +1,4 @@
-__version__ = "1.9.3"
+__version__ = "1.9.4"
 __author__ = "Vsaan212"
 __title__ = "Vsaan212 Workflow Utilities"
 # custom_nodes/vsaan212_workflow_utilities/__init__.py
