@@ -1,14 +1,26 @@
 """Lazy Switch nodes — pick on_true / on_false by matching an upstream text value."""
 from __future__ import annotations
 
+import re
+
 
 def _matches(compare: str, match: str, case_sensitive: bool) -> bool:
+    """True when compare equals match, or equals any alternative in a list.
+
+    ``match`` may be a single value or several alternatives separated by
+    commas or pipes (e.g. ``t2v,r2v`` or ``T2V | R2V``).
+    """
     left = (compare or "").strip()
     right = (match or "").strip()
     if not case_sensitive:
         left = left.lower()
         right = right.lower()
-    return left == right
+    if not right:
+        return left == ""
+    alts = [p.strip() for p in re.split(r"[,|]", right) if p.strip()]
+    if len(alts) <= 1:
+        return left == (alts[0] if alts else "")
+    return left in alts
 
 
 class _LazySwitchBase:
@@ -48,7 +60,10 @@ class LazySwitchFloat(_LazySwitchBase):
                     {
                         "multiline": False,
                         "default": "",
-                        "tooltip": "When compare equals this, output on_true; otherwise on_false.",
+                        "tooltip": (
+                            "When compare equals this, output on_true; otherwise on_false. "
+                            "Use commas or pipes for alternatives (e.g. t2v,r2v)."
+                        ),
                     },
                 ),
                 "on_true": (
@@ -106,7 +121,10 @@ class LazySwitchInt(_LazySwitchBase):
                     {
                         "multiline": False,
                         "default": "",
-                        "tooltip": "When compare equals this, output on_true; otherwise on_false.",
+                        "tooltip": (
+                            "When compare equals this, output on_true; otherwise on_false. "
+                            "Use commas or pipes for alternatives (e.g. t2v,r2v)."
+                        ),
                     },
                 ),
                 "on_true": (
@@ -164,7 +182,10 @@ class LazySwitchText(_LazySwitchBase):
                     {
                         "multiline": False,
                         "default": "",
-                        "tooltip": "When compare equals this, output on_true; otherwise on_false.",
+                        "tooltip": (
+                            "When compare equals this, output on_true; otherwise on_false. "
+                            "Use commas or pipes for alternatives (e.g. t2v,r2v)."
+                        ),
                     },
                 ),
                 "on_true": (

@@ -5,6 +5,12 @@ index: 80
 
 # Troubleshooting
 
+## SamplerCustomAdvanced / float division by zero (T2V only)
+
+MiniMax builds a spatial layout from latent **width × height**. In T2V the first-frame loader correctly emits no image and **`0×0`** size. If Auto width/height still takes “from first frame” for every non-R2V mode, the empty latent is `0×0` and sampling crashes inside `PackedLayout`.
+
+**Fix:** On the Lazy Switch (Integer) nodes that feed Auto width / Auto height, set **`match`** to `t2v,r2v` so T2V and R2V use **ResolutionSelector**, while I2V / FL2V keep first-frame size. Reload custom nodes if the switch does not accept comma-separated match yet.
+
 ## Image did not affect the video
 
 - Check Global Selector mode (I2V needs first frame; FL2V needs first+last; R2V needs refs).  

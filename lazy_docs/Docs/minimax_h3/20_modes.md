@@ -11,7 +11,8 @@ Use **Lazy Global Selector** as your only mode switch. Do not mute half the grap
 
 - You write (or generate) a prompt.  
 - No start image is required.  
-- Image Loaders can stay connected; they simply emit nothing for this mode.
+- Image Loaders can stay connected; they simply emit nothing for this mode.  
+- Canvas size comes from **ResolutionSelector** (Auto width/height), not from the first-frame loader.
 
 ## I2V — Image to video (most common starter)
 

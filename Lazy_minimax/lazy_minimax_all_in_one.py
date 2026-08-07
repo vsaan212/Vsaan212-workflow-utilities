@@ -334,6 +334,13 @@ class LazyMinimaxAllInOne(io.ComfyNode):
     ) -> io.NodeOutput:
         length = seconds_to_h3_frames(duration_seconds)
         prompt = prompt if prompt is not None else ""
+        if int(width) <= 0 or int(height) <= 0:
+            raise ValueError(
+                "Lazy MiniMax All-in-One: width and height must be > 0 "
+                f"(got {width}x{height}). For T2V/R2V use ResolutionSelector "
+                "(Auto width/height match should include t2v,r2v). "
+                "I2V/FL2V should take size from the first-frame loader."
+            )
 
         selector_text = (selector or "").strip()
         sel = parse_selector_tagged(selector_text)
