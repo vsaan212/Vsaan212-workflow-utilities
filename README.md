@@ -1,6 +1,6 @@
 # Vsaan212-workflow-utilities
 
-ComfyUI custom nodes: selectors, dual-stack subject/scene automation, text utilities, optional LoRA bypass, prompt library, **Lazy Image Loader**, **Lazy MiniMax All-in-One** (H3), and **LazyPrompt** (multi-target prompt engineer + optional vision). MIT licensed.
+ComfyUI custom nodes: selectors, dual-stack subject/scene automation, text utilities, optional LoRA bypass, prompt library, **Lazy Image Loader**, **Lazy MiniMax All-in-One** (H3), **Lazy Switch** (float/int/text), and **LazyPrompt** (multi-target prompt engineer + optional vision). MIT licensed.
 
 ## Nodes (summary)
 
@@ -11,6 +11,7 @@ ComfyUI custom nodes: selectors, dual-stack subject/scene automation, text utili
 | **Lazy-subject-and-scene-automation** | One node: **one subject** + **two scenario** files (up to 6 scenario LoRA sets), **`model_high`** / **`clip_high`** required (single-model **Z-Image**, **Krea2**, Flux, etc.) or full Wan-style **high/low** dual stack when **`model_low`** / **`clip_low`** are wired. **`prompt`**, **`keywords`**, **`subject_description`**, **`prompt_override`**, **`selector`** (MiniMax workflow / reference paths). Optional **`global_selector_input`**. **Live editors** on the node (queue uses pane text, not disk); **Save edits** to `.txt`; **scenario 2 strength** sliders override `[LoraHighA]` / `[LoraLowA]` model strength. Uses **`lazy_subject_scene_automation/SubjectFiles`** and **`…/ScenarioFiles`**. | [docs/nodes/lazy-subject-scene-automation.md](docs/nodes/lazy-subject-scene-automation.md) |
 | **Lazy Global Selector** | One dropdown (`T2V` / `I2V` / `FL2V` / `R2V`) that fans out to Image Loaders, SAS, Prompt Engineer, MiniMax, and Model Switcher. | [docs/nodes/lazy-global-selector.md](docs/nodes/lazy-global-selector.md) |
 | **Lazy Model Switcher** | Pick fl2va vs ref2va UNET from the mode string for a single sampler path. | [docs/nodes/lazy-model-switcher.md](docs/nodes/lazy-model-switcher.md) |
+| **Lazy Switch (Float / Integer / Text)** | Compare an upstream string to **`match`**; output **`on_true`** or **`on_false`** (typed). Unused branch is lazy-skipped. | [docs/nodes/lazy-switch.md](docs/nodes/lazy-switch.md) |
 | **Text Split** | Split by separator, regex, or **tagged format** (`[Tag]` headers). **Auto-detects** v2 subject/scenario files when the first line is `[LoraHighA]`; otherwise **`tagged_format`** or separator `#` for legacy graphs. | [docs/nodes/text-split.md](docs/nodes/text-split.md) |
 | **Optional Switch LoRA** | Apply a LoRA or pass through when path is `bypass` / empty. | [docs/nodes/optional-switch-lora.md](docs/nodes/optional-switch-lora.md) |
 | **Lazy Prompt Saver** | Save / clone / delete named prompts in `lazy_prompts.json`. | [docs/nodes/lazy-prompt-saver.md](docs/nodes/lazy-prompt-saver.md) |

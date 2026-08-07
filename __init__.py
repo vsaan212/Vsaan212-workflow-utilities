@@ -1,4 +1,4 @@
-__version__ = "1.10.0"
+__version__ = "1.11.0"
 __author__ = "Vsaan212"
 __title__ = "Vsaan212 Workflow Utilities"
 # custom_nodes/vsaan212_workflow_utilities/__init__.py
@@ -164,6 +164,16 @@ except Exception:
     LMS_CLASSES = {}
     LMS_DISPLAY = {}
 
+# Lazy General Nodes (text-match Lazy Switch: float / int / text)
+try:
+    from .lazy_generalnodes import (
+        NODE_CLASS_MAPPINGS as LGN_CLASSES,
+        NODE_DISPLAY_NAME_MAPPINGS as LGN_DISPLAY,
+    )
+except Exception:
+    LGN_CLASSES = {}
+    LGN_DISPLAY = {}
+
 # --- API routes for live folder scanning ---
 from aiohttp import web
 from server import PromptServer
@@ -265,3 +275,6 @@ NODE_DISPLAY_NAME_MAPPINGS.update(LGS_DISPLAY)
 
 NODE_CLASS_MAPPINGS.update(LMS_CLASSES)
 NODE_DISPLAY_NAME_MAPPINGS.update(LMS_DISPLAY)
+
+NODE_CLASS_MAPPINGS.update(LGN_CLASSES)
+NODE_DISPLAY_NAME_MAPPINGS.update(LGN_DISPLAY)

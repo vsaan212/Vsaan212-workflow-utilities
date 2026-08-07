@@ -14,6 +14,7 @@ Detailed workflow and file-format guides live under **`docs/nodes/`**. End-to-en
 | [nodes/lazy-subject-scene-automation.md](nodes/lazy-subject-scene-automation.md) | Lazy-subject-and-scene-automation |
 | [nodes/lazy-global-selector.md](nodes/lazy-global-selector.md) | Lazy Global Selector (T2V/I2V/FL2V/R2V) |
 | [nodes/lazy-model-switcher.md](nodes/lazy-model-switcher.md) | Lazy Model Switcher (FL2V vs R2V UNET) |
+| [nodes/lazy-switch.md](nodes/lazy-switch.md) | Lazy Switch (Float / Integer / Text) |
 | [nodes/text-split.md](nodes/text-split.md) | Text Split |
 | [nodes/optional-switch-lora.md](nodes/optional-switch-lora.md) | Optional Switch LoRA |
 | [nodes/lazy-prompt-saver.md](nodes/lazy-prompt-saver.md) | Lazy Prompt Saver |
