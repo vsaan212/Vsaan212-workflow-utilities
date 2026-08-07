@@ -18,6 +18,9 @@
 # Note: All dependencies should specify minimum versions only
 # to avoid conflicts with other custom nodes
 
+# --- Lazy Docs (Markdown → HTML for viewer) ---
+markdown>=3.5
+
 # --- LazyPrompt (Prompt Engineer + Vision Describe) ---
 transformers>=4.40.0
 huggingface_hub>=0.23.0

@@ -1,6 +1,6 @@
 # Vsaan212-workflow-utilities
 
-ComfyUI custom nodes: selectors, dual-stack subject/scene automation, text utilities, optional LoRA bypass, prompt library, **Lazy Image Loader**, **Lazy MiniMax All-in-One** (H3), **Lazy Switch** (float/int/text), and **LazyPrompt** (multi-target prompt engineer + optional vision). MIT licensed.
+ComfyUI custom nodes: selectors, dual-stack subject/scene automation, text utilities, optional LoRA bypass, prompt library, **Lazy Image Loader**, **Lazy MiniMax All-in-One** (H3), **Lazy Switch** (float/int/text), **Lazy Docs** (Markdown viewer), and **LazyPrompt** (multi-target prompt engineer + optional vision). MIT licensed.
 
 ## Nodes (summary)
 
@@ -12,6 +12,7 @@ ComfyUI custom nodes: selectors, dual-stack subject/scene automation, text utili
 | **Lazy Global Selector** | One dropdown (`T2V` / `I2V` / `FL2V` / `R2V`) that fans out to Image Loaders, SAS, Prompt Engineer, MiniMax, and Model Switcher. | [docs/nodes/lazy-global-selector.md](docs/nodes/lazy-global-selector.md) |
 | **Lazy Model Switcher** | Pick fl2va vs ref2va UNET from the mode string for a single sampler path. | [docs/nodes/lazy-model-switcher.md](docs/nodes/lazy-model-switcher.md) |
 | **Lazy Switch (Float / Integer / Text)** | Compare an upstream string to **`match`**; output **`on_true`** or **`on_false`** (typed). Unused branch is lazy-skipped. | [docs/nodes/lazy-switch.md](docs/nodes/lazy-switch.md) |
+| **Lazy Docs** | Split-pane Markdown docs from `lazy_docs/Docs/` (optional subfolder). Index from frontmatter; click to load HTML/Raw. | [docs/nodes/lazy-docs.md](docs/nodes/lazy-docs.md) |
 | **Text Split** | Split by separator, regex, or **tagged format** (`[Tag]` headers). **Auto-detects** v2 subject/scenario files when the first line is `[LoraHighA]`; otherwise **`tagged_format`** or separator `#` for legacy graphs. | [docs/nodes/text-split.md](docs/nodes/text-split.md) |
 | **Optional Switch LoRA** | Apply a LoRA or pass through when path is `bypass` / empty. | [docs/nodes/optional-switch-lora.md](docs/nodes/optional-switch-lora.md) |
 | **Lazy Prompt Saver** | Save / clone / delete named prompts in `lazy_prompts.json`. | [docs/nodes/lazy-prompt-saver.md](docs/nodes/lazy-prompt-saver.md) |

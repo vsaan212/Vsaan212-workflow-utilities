@@ -50,3 +50,6 @@ node.zip
 # Local packaging manifest (do not commit)
 .tracking
 
+# Local-only Lazy Docs packs (not published / not synced to git)
+lazy_docs/Docs/local_*/
+

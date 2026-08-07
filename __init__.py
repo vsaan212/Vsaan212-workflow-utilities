@@ -1,4 +1,4 @@
-__version__ = "1.11.0"
+__version__ = "1.12.0"
 __author__ = "Vsaan212"
 __title__ = "Vsaan212 Workflow Utilities"
 # custom_nodes/vsaan212_workflow_utilities/__init__.py
@@ -174,6 +174,24 @@ except Exception:
     LGN_CLASSES = {}
     LGN_DISPLAY = {}
 
+# Lazy Docs (Markdown documentation viewer)
+LazyDocsApi = None
+try:
+    from .lazy_docs import (
+        NODE_CLASS_MAPPINGS as LD_CLASSES,
+        NODE_DISPLAY_NAME_MAPPINGS as LD_DISPLAY,
+        api_content as lazy_docs_api_content,
+        api_folders as lazy_docs_api_folders,
+        api_index as lazy_docs_api_index,
+    )
+    LazyDocsApi = True
+except Exception:
+    LD_CLASSES = {}
+    LD_DISPLAY = {}
+    lazy_docs_api_content = None
+    lazy_docs_api_folders = None
+    lazy_docs_api_index = None
+
 # --- API routes for live folder scanning ---
 from aiohttp import web
 from server import PromptServer
@@ -236,6 +254,24 @@ if LazySubjectSceneAutomation is not None:
         status = 400 if result.get("error") and not result.get("saved") else 200
         return web.json_response(result, status=status)
 
+if LazyDocsApi:
+
+    @PromptServer.instance.routes.get("/vsaan212/lazy-docs/folders")
+    async def get_lazy_docs_folders(request):
+        return web.json_response(lazy_docs_api_folders())
+
+    @PromptServer.instance.routes.get("/vsaan212/lazy-docs/index")
+    async def get_lazy_docs_index(request):
+        folder = request.rel_url.query.get("folder", "")
+        return web.json_response(lazy_docs_api_index(folder))
+
+    @PromptServer.instance.routes.get("/vsaan212/lazy-docs/content")
+    async def get_lazy_docs_content(request):
+        path = request.rel_url.query.get("path", "")
+        data = lazy_docs_api_content(path)
+        status = 400 if data.get("error") else 200
+        return web.json_response(data, status=status)
+
 # --- Merge exports for ComfyUI ---
 NODE_CLASS_MAPPINGS = {}
 NODE_DISPLAY_NAME_MAPPINGS = {}
@@ -278,3 +314,6 @@ NODE_DISPLAY_NAME_MAPPINGS.update(LMS_DISPLAY)
 
 NODE_CLASS_MAPPINGS.update(LGN_CLASSES)
 NODE_DISPLAY_NAME_MAPPINGS.update(LGN_DISPLAY)
+
+NODE_CLASS_MAPPINGS.update(LD_CLASSES)
+NODE_DISPLAY_NAME_MAPPINGS.update(LD_DISPLAY)
