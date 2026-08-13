@@ -26,9 +26,21 @@ Backends: local HF (8B/3B), **LM Studio (API)**, or **TextGenerate (CLIP)** — 
 4. Optional **`scene_context`** — connect text from **Vision Describe** or any frame/scene description.
 5. Optional **`prompt_override_input`** — when wired/non-empty, **replaces `user_input`** for the LLM request (LM Studio API and local HF). Typical source: **`prompt_override`** from **Lazy-subject-and-scene-automation** when the scenario file uses a **`[Prompt]`** block instead of **`[desciption]`**.
 6. Optional **`user_instructions`** — temporary instructions injected into `***UserPrompt***` markers in the system prompt (empty = block omitted).
-7. Optional media — **`first_frame`** (legacy alias **`image`**), **`last_frame`**, **`reference_image_1`…`5`**, **`reference_audio`**. Gate with **`global_selector_input`**. **`SAS_automation_selector_input`**: mode from `[Workflow]` always applies; direct image/audio sockets are ignored **only** when the blob has `[ReferenceImage*]` / `[AudioReference]` paths (loaded from disk). A Workflow-only SAS blob keeps wired Image Loader frames. **LM Studio vision** uses the gated first frame (or first ref for R2V). Local HF backends ignore images — use Vision Describe → `scene_context`.
+7. Optional media — **`first_frame`** (legacy alias **`image`**), **`last_frame`**, **`reference_image_1`…`5`**, **`reference_audio`**. Gate with **`global_selector_input`**. **`SAS_automation_selector_input`**: mode from `[Workflow]` always applies; direct image/audio sockets are ignored **only** when the blob has `[ReferenceImage*]` / `[AudioReference]` paths (loaded from disk). A Workflow-only SAS blob keeps wired Image Loader frames. **LM Studio vision**: I2V sends the gated first frame; FL2V sends first+last; R2V sends all connected **`reference_image_1`…`5`** (up to 5, labeled `<Picture N>` by socket index). Local HF backends ignore images — use Vision Describe → `scene_context`.
 8. **`bypass`** ON skips the LLM and passes the effective user text through (override if connected, else **`user_input`**).
-9. Outputs: **`PROMPT`**, **`PREVIEW`**, **`NEG_PROMPT`**, **`selector_Out`**, plus gated **`first_frame` / `last_frame` / refs / `reference_audio`** for MiniMax wiring.
+9. Optional **`model_high`** / **`clip_high`** / **`model_low`** / **`clip_low`** — wire from [Lazy-subject-and-scene-automation](lazy-subject-scene-automation.md) (or a checkpoint) when using Prompt-side dynamic LoRAs. After the LLM (or bypass), any **`[LoraH]path[/LoraH]`** / **`[LoraL]path[/LoraL]`** blocks in the Prompt text are loaded onto the high/low stacks (strength **1.0**) and **stripped** from **`PROMPT`** / **`PREVIEW`** so the diffusion model never sees them. Empty / `bypass` paths are ignored. This is for scenario **`[Prompt]`** (and LLM output), not **`[desciption]`**. File-slot LoRAs (`[LoraHighA]`, etc.) stay on the automation node.
+10. Outputs: **`PROMPT`**, **`PREVIEW`**, **`NEG_PROMPT`**, **`selector_Out`**, gated media, plus **`model_high`** / **`model_low`** / **`clip_high`** / **`clip_low`** (passthrough when unwired or no Prompt LoRA blocks).
+
+### Prompt dynamic LoRA tags
+
+Use closed tags in the Prompt / LLM output (not description):
+
+```text
+[LoraH]relative\or\absolute\lora.safetensors[/LoraH]
+[LoraL]relative\or\absolute\lora.safetensors[/LoraL]
+```
+
+Tell the LLM (via **`user_instructions`** or **`system_prompt`**) to emit these when it picks a LoRA. Authored tags in scenario **`[Prompt]`** / **`prompt_override_input`** are collected even if the LLM drops them; only the final **`PROMPT`** text is stripped. Example scenario file: `lazy_subject_scene_automation/ScenarioFiles/Prompt dynamic Lora example.txt`.
 
 ### Operational tips
 

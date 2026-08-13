@@ -1,0 +1,13 @@
+[LoraHighA]
+Bypass
+[LoraLowA]
+bypass
+[Prompt]
+A short scene beat for the LLM path.
+
+Closed Prompt-side LoRA tags (loaded by LazyPrompt after enhance, then stripped from PROMPT):
+[LoraH]relative\path\to\high_lora.safetensors[/LoraH]
+[LoraL]relative\path\to\low_lora.safetensors[/LoraL]
+
+Use real LoRA filenames under your ComfyUI models/loras folder. Empty or bypass paths are ignored.
+Replace the placeholder paths above before queueing.

@@ -172,6 +172,8 @@ Bracketed runtime instructions (pacing, content tier, sequence, no-person, multi
 
 When **`bypass`** is **true**: no LLM call; effective user text is returned for **`PROMPT`** / **`PREVIEW`**.
 
+In both bypass and normal runs, after the final Prompt text is ready, **`[LoraH]…[/LoraH]`** / **`[LoraL]…[/LoraL]`** blocks are applied to optional **`model_high`** / **`model_low`** (and paired CLIP) and stripped from the string outputs.
+
 ---
 
 ## 6. Implementation notes
@@ -180,6 +182,7 @@ When **`bypass`** is **true**: no LLM call; effective user text is returned for 
 2. **Override vs `target_model`** — Changing skill still changes augmentation, pacing, and finalize/negative behavior (except minimal mode).
 3. **Legacy workflows** — Old `screenplay_mode` / `invent_dialogue` / `fps` widgets are ignored; pick Screenplay or Dialog skills instead. Old creativity labels are coerced to floats (1.1 → 1.0).
 4. **PREVIEW vs PROMPT** — Same cleaned positive string after a normal run; **`NEG_PROMPT`** carries the derived or split negative.
+5. **Prompt LoRA tags** — Closed `[LoraH]` / `[LoraL]` in Prompt / LLM output only (not `[desciption]`). See [lazyprompt.md](lazyprompt.md#prompt-dynamic-lora-tags).
 
 ---
 
@@ -187,7 +190,7 @@ When **`bypass`** is **true**: no LLM call; effective user text is returned for 
 
 | Concern | Location |
 |---------|----------|
-| Node UI, `generate`, message assembly, cleaning | `lazyprompt/lazy_prompt_engineer.py` |
+| Node UI, `generate`, message assembly, cleaning, Prompt LoRA parse | `lazyprompt/lazy_prompt_engineer.py` |
 | Skill loader, header parse, UserPrompt inject, **`None`** | `lazyprompt/system_prompts.py` |
 | **Editable skill system prompts** | **`lazyprompt/Model_Skills/*.md`** |
 | Environment + duration + character augmentation | `lazyprompt/message_builder.py` |

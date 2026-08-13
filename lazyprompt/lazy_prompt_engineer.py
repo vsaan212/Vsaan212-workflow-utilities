@@ -47,6 +47,145 @@ from ..workflow_modes import (
 
 import folder_paths
 
+# Closed Prompt-side LoRA markers (LLM / [Prompt] output). Distinct from SAS file
+# section tags like [LoraHighA]. Parsed after the LLM (or bypass), then stripped.
+_LORA_PROMPT_BLOCK_RE = re.compile(
+    r"\[(LoraH|LoraL)\](.*?)\[/\1\]",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def parse_and_strip_prompt_loras(text: str) -> tuple[str, list[str], list[str]]:
+    """
+    Pull [LoraH]path[/LoraH] / [LoraL]path[/LoraL] out of Prompt text.
+
+    Returns (clean_text, high_paths, low_paths). Empty / bypass paths are omitted
+    from the load lists but still removed from the text.
+    """
+    if not text:
+        return "", [], []
+
+    high: list[str] = []
+    low: list[str] = []
+    for match in _LORA_PROMPT_BLOCK_RE.finditer(text):
+        kind = (match.group(1) or "").lower()
+        path = (match.group(2) or "").strip().strip('"').strip("'")
+        if not path or path.lower() == "bypass":
+            continue
+        if kind == "lorah":
+            high.append(path)
+        else:
+            low.append(path)
+
+    clean = _LORA_PROMPT_BLOCK_RE.sub("", text)
+    clean = re.sub(r"[ \t]+\n", "\n", clean)
+    clean = re.sub(r"\n{3,}", "\n\n", clean).strip()
+    return clean, high, low
+
+
+def _resolve_prompt_lora_name(cmd: str) -> str:
+    path = (cmd or "").strip().strip('"').strip("'")
+    if not path:
+        return ""
+    if os.path.exists(path):
+        from comfy import model_management
+
+        lora_dir = os.path.dirname(os.path.abspath(path))
+        model_management.lora_paths.add(lora_dir)
+        return os.path.basename(path)
+    return path
+
+
+def _apply_prompt_lora_paths(model, clip, paths: list[str], label: str):
+    """Apply LoRA paths to a MODEL+CLIP pair (stock LoraLoader). No-op if empty."""
+    if not paths:
+        return model, clip
+    if model is None:
+        print(
+            f"[LazyPrompt] {label}: {len(paths)} path(s) in Prompt but model not wired — skipped."
+        )
+        return model, clip
+    if clip is None:
+        print(f"[LazyPrompt] {label}: CLIP not wired — skipped load.")
+        return model, clip
+
+    from nodes import LoraLoader
+
+    loader = LoraLoader()
+    for path in paths:
+        lora_name = _resolve_prompt_lora_name(path)
+        if not lora_name or lora_name.lower() == "bypass":
+            continue
+        print(f"[LazyPrompt] {label}: loading {lora_name}")
+        model, clip = loader.load_lora(model, clip, lora_name, 1.0, 1.0)
+    return model, clip
+
+
+def _unique_lora_paths(*groups: list[str]) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for group in groups:
+        for path in group:
+            key = path.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(path)
+    return out
+
+
+def apply_prompt_lora_blocks(
+    prompt_text: str,
+    model_high=None,
+    clip_high=None,
+    model_low=None,
+    clip_low=None,
+    also_collect_from: str = "",
+):
+    """
+    Strip Prompt LoRA blocks and load them onto high/low stacks (like SAS slots).
+
+    LoraH → model_high / clip_high; LoraL → model_low (clip_low, or clip_high if
+    low CLIP is unwired). Strengths default to 1.0.
+
+    Paths are taken from the final Prompt text and optionally from
+    ``also_collect_from`` (e.g. scenario ``[Prompt]`` / override) so authored
+    tags still load if the LLM rewrites the scene without echoing them.
+    Only ``prompt_text`` is stripped for the string outputs.
+    """
+    clean, high_out, low_out = parse_and_strip_prompt_loras(prompt_text or "")
+    high_in: list[str] = []
+    low_in: list[str] = []
+    extra = (also_collect_from or "").strip()
+    if extra and extra != (prompt_text or ""):
+        _, high_in, low_in = parse_and_strip_prompt_loras(extra)
+
+    high_paths = _unique_lora_paths(high_in, high_out)
+    low_paths = _unique_lora_paths(low_in, low_out)
+    if high_paths or low_paths:
+        print(
+            f"[LazyPrompt] Prompt LoRA blocks: {len(high_paths)} LoraH, "
+            f"{len(low_paths)} LoraL — stripped before model handoff."
+        )
+
+    model_h, clip_h = _apply_prompt_lora_paths(
+        model_high, clip_high, high_paths, "LoraH"
+    )
+    if model_low is not None:
+        clip_for_low = clip_low if clip_low is not None else clip_high
+        model_l, clip_l_applied = _apply_prompt_lora_paths(
+            model_low, clip_for_low, low_paths, "LoraL"
+        )
+        clip_l = clip_l_applied if clip_low is not None else None
+    else:
+        if low_paths:
+            print(
+                "[LazyPrompt] LoraL path(s) in Prompt but model_low not wired — skipped."
+            )
+        model_l, clip_l = None, None
+
+    return clean, model_h, model_l, clip_h, clip_l
+
 
 def _strip_input_prefix(path: str) -> str:
     p = (path or "").strip().replace("\\", "/")
@@ -485,6 +624,30 @@ class LazyPromptEngineer:
                         "Empty = block omitted (nothing passed)."
                     ),
                 }),
+                "model_high": ("MODEL", {
+                    "tooltip": (
+                        "Optional high stack (after SAS / checkpoint). Prompt [LoraH]path[/LoraH] "
+                        "blocks load here after the LLM, then are stripped from PROMPT."
+                    ),
+                }),
+                "clip_high": ("CLIP", {
+                    "tooltip": (
+                        "CLIP paired with model_high for Prompt [LoraH] loads. "
+                        "Separate from the TextGenerate clip input."
+                    ),
+                }),
+                "model_low": ("MODEL", {
+                    "tooltip": (
+                        "Optional low stack. Prompt [LoraL]path[/LoraL] blocks load here "
+                        "after the LLM (Wan-style dual noise / low branch)."
+                    ),
+                }),
+                "clip_low": ("CLIP", {
+                    "tooltip": (
+                        "CLIP paired with model_low for Prompt [LoraL] loads. "
+                        "If unwired, LoraL still patches model_low using clip_high."
+                    ),
+                }),
             },
         }
 
@@ -501,6 +664,10 @@ class LazyPromptEngineer:
         "IMAGE",
         "IMAGE",
         "AUDIO",
+        "MODEL",
+        "MODEL",
+        "CLIP",
+        "CLIP",
     )
     RETURN_NAMES = (
         "PROMPT",
@@ -515,6 +682,10 @@ class LazyPromptEngineer:
         "reference_image_4",
         "reference_image_5",
         "reference_audio",
+        "model_high",
+        "model_low",
+        "clip_high",
+        "clip_low",
     )
     FUNCTION = "generate"
     CATEGORY = "vsaan212/LazyPrompt"
@@ -862,11 +1033,15 @@ class LazyPromptEngineer:
     LM_STUDIO_BASE_URL = "http://localhost:1234"
 
     @staticmethod
-    def _lm_studio_messages_to_parts(messages) -> tuple[str, str, str | None]:
-        """OpenAI-style messages → (system_prompt, user_text, optional image data URL)."""
+    def _lm_studio_messages_to_parts(messages) -> tuple[str, str, list[str]]:
+        """OpenAI-style messages → (system_prompt, user_text, image data URLs).
+
+        Collects every ``image_url`` part (up to 5) in order so R2V can send
+        multiple reference images to LM Studio vision.
+        """
         system_prompt = ""
-        user_text = ""
-        image_url = None
+        text_parts: list[str] = []
+        image_urls: list[str] = []
         for msg in messages:
             role = msg.get("role")
             content = msg.get("content")
@@ -878,20 +1053,29 @@ class LazyPromptEngineer:
                         if not isinstance(part, dict):
                             continue
                         if part.get("type") == "text":
-                            user_text = part.get("text") or ""
+                            text_parts.append(part.get("text") or "")
                         elif part.get("type") == "image_url":
-                            image_url = (part.get("image_url") or {}).get("url")
+                            url = (part.get("image_url") or {}).get("url")
+                            if url and len(image_urls) < 5:
+                                image_urls.append(url)
                 else:
-                    user_text = content if isinstance(content, str) else str(content or "")
-        return system_prompt, user_text, image_url
+                    text_parts.append(
+                        content if isinstance(content, str) else str(content or "")
+                    )
+        user_text = "".join(text_parts)
+        return system_prompt, user_text, image_urls
 
     @staticmethod
-    def _lm_studio_build_v1_input(user_text: str, image_url: str | None):
-        if image_url:
-            return [
-                {"type": "text", "content": user_text},
-                {"type": "image", "data_url": image_url},
-            ]
+    def _lm_studio_build_v1_input(user_text: str, image_urls: list[str] | str | None):
+        """Build LM Studio /api/v1/chat ``input`` with optional multi-image parts."""
+        if isinstance(image_urls, str):
+            image_urls = [image_urls] if image_urls else []
+        image_urls = [u for u in (image_urls or []) if u][:5]
+        if image_urls:
+            parts = [{"type": "text", "content": user_text}]
+            for url in image_urls:
+                parts.append({"type": "image", "data_url": url})
+            return parts
         return user_text
 
     @classmethod
@@ -966,14 +1150,14 @@ class LazyPromptEngineer:
         self,
         system_prompt: str,
         user_text: str,
-        image_url: str | None,
+        image_urls: list[str] | str | None,
         model_name: str,
         temperature: float,
         max_tokens: int,
     ) -> tuple[str, str | None]:
         body = {
             "model": model_name,
-            "input": self._lm_studio_build_v1_input(user_text, image_url),
+            "input": self._lm_studio_build_v1_input(user_text, image_urls),
             "temperature": temperature,
             "top_p": 0.9,
             "max_output_tokens": max_tokens,
@@ -1025,14 +1209,14 @@ class LazyPromptEngineer:
         ttl_seconds: int = 0,
     ) -> str:
         """Call LM Studio native v1 REST API, with OpenAI-compatible fallback."""
-        system_prompt, user_text, image_url = self._lm_studio_messages_to_parts(messages)
+        system_prompt, user_text, image_urls = self._lm_studio_messages_to_parts(messages)
         unload_instance_id = None
 
         try:
             result, unload_instance_id = self._generate_via_lm_studio_v1(
                 system_prompt=system_prompt,
                 user_text=user_text,
-                image_url=image_url,
+                image_urls=image_urls,
                 model_name=model_name,
                 temperature=temperature,
                 max_tokens=max_tokens,
@@ -1270,6 +1454,10 @@ class LazyPromptEngineer:
         SAS_automation_selector_input="",
         prompt_override_input="",
         user_instructions="",
+        model_high=None,
+        clip_high=None,
+        model_low=None,
+        clip_low=None,
         # Legacy kwargs from older workflows (ignored)
         screenplay_mode=False,
         invent_dialogue=False,
@@ -1351,9 +1539,25 @@ class LazyPromptEngineer:
         selector_out = mode or resolve_mode_from_selector(global_selector_input or "") or ""
 
         def _pack(prompt_text, preview_text, neg_text):
-            return (
+            # After LLM (or bypass): apply Prompt [LoraH]/[LoraL] to stacks, strip tags
+            # so the diffusion model never sees the loader markers.
+            clean, mh, ml, ch, cl = apply_prompt_lora_blocks(
                 prompt_text,
-                preview_text,
+                model_high=model_high,
+                clip_high=clip_high,
+                model_low=model_low,
+                clip_low=clip_low,
+                also_collect_from=effective_user,
+            )
+            # preview_text matches prompt_text in all current call sites; strip both.
+            preview_clean = (
+                clean
+                if preview_text == prompt_text
+                else parse_and_strip_prompt_loras(preview_text or "")[0]
+            )
+            return (
+                clean,
+                preview_clean,
                 neg_text,
                 selector_out,
                 out_first,
@@ -1364,11 +1568,27 @@ class LazyPromptEngineer:
                 out_refs[3],
                 out_refs[4],
                 out_audio,
+                mh,
+                ml,
+                ch,
+                cl,
             )
 
-        vision_image = out_first
-        if vision_image is None and mode == "R2V":
-            vision_image = next((r for r in out_refs if r is not None), None)
+        # Vision payloads for LM Studio / TextGenerate:
+        # - I2V: first frame
+        # - FL2V: first + last frame
+        # - R2V: all connected reference_image_1..5 (socket index = <Picture N>)
+        vision_images: list[tuple[int, object]] = []
+        if mode == "R2V":
+            for i, r in enumerate(out_refs):
+                if r is not None:
+                    vision_images.append((i + 1, r))
+        else:
+            if out_first is not None:
+                vision_images.append((1, out_first))
+            if mode == "FL2V" and out_last is not None:
+                vision_images.append((2, out_last))
+        vision_image = vision_images[0][1] if vision_images else None
 
         # ── Bypass mode — no model loaded, input passed straight through ────────
         if bypass:
@@ -1378,7 +1598,7 @@ class LazyPromptEngineer:
 
         use_lm_studio = model == "LM Studio (API)"
         use_textgenerate = model == "TextGenerate (CLIP)"
-        if vision_image is not None and not use_lm_studio and not use_textgenerate:
+        if vision_images and not use_lm_studio and not use_textgenerate:
             print(
                 "[LazyPrompt] IMAGE input is sent with LM Studio (API) or TextGenerate (CLIP). "
                 "Switch backend, or use scene_context from LazyPrompt — Vision Describe."
@@ -1661,7 +1881,7 @@ class LazyPromptEngineer:
             )
         else:
             has_visual_context = bool(scene_context and scene_context.strip()) or (
-                (use_lm_studio or use_textgenerate) and vision_image is not None
+                (use_lm_studio or use_textgenerate) and bool(vision_images)
             )
             aug = build_prompt_augmentation(
                 target_model=target_model,
@@ -1707,24 +1927,41 @@ class LazyPromptEngineer:
                 + length_instruction
             )
         user_text = effective_input + user_tail
-        if use_lm_studio and vision_image is not None:
+        if use_lm_studio and vision_images:
             try:
-                data_url = _comfy_image_to_jpeg_data_url(vision_image)
+                content_parts = [{"type": "text", "text": user_text}]
+                if mode == "R2V":
+                    pic_tags = ", ".join(f"<Picture {n}>" for n, _ in vision_images)
+                    content_parts.append(
+                        {
+                            "type": "text",
+                            "text": (
+                                f"\n\n[VISION: {len(vision_images)} reference image(s) "
+                                f"attached in socket order: {pic_tags}]"
+                            ),
+                        }
+                    )
+                for n, tensor in vision_images:
+                    data_url = _comfy_image_to_jpeg_data_url(tensor)
+                    if mode == "R2V":
+                        content_parts.append(
+                            {"type": "text", "text": f"\n[<Picture {n}>]"}
+                        )
+                    content_parts.append(
+                        {"type": "image_url", "image_url": {"url": data_url}}
+                    )
             except Exception as e:
                 raise RuntimeError(
                     f"[LazyPrompt] Failed to encode IMAGE for LM Studio: {e}"
                 ) from e
             messages = [
                 {"role": "system", "content": effective_system_prompt},
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": user_text},
-                        {"type": "image_url", "image_url": {"url": data_url}},
-                    ],
-                },
+                {"role": "user", "content": content_parts},
             ]
-            print("[LazyPrompt] LM Studio request includes vision (multimodal user message).")
+            print(
+                f"[LazyPrompt] LM Studio request includes vision "
+                f"({len(vision_images)} image(s))."
+            )
         else:
             messages = [
                 {"role": "system", "content": effective_system_prompt},

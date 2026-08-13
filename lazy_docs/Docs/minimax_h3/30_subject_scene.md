@@ -48,6 +48,7 @@ Important words:
 - **`bypass`** — skip that LoRA slot (case does not matter).  
 - **`[desciption]`** — yes, that spelling is intentional in this pack. Body text under it is the character/scene description.  
 - **`[Prompt]`** — optional full prompt block on a **scenario** file. When present, the automation node outputs it as **`prompt_override`** for LazyPrompt (it can replace your short `user_input`).  
+  Inside **`[Prompt]`** (or LLM output), you may also use closed **`[LoraH]path[/LoraH]`** / **`[LoraL]path[/LoraL]`** tags. LazyPrompt loads those onto **`model_high`** / **`model_low`** after the LLM and strips them from the text. Do **not** put those closed tags under **`[desciption]`** — file LoRAs stay on `[LoraHighA]` / `[LoraLowA]` slots.  
 - **`[KeywordA]`** etc. — short trigger words joined into the **keywords** output.
 
 You can also write strengths on the tag line:
@@ -72,7 +73,8 @@ Typical MiniMax wiring:
 
 1. Automation **`subject_description`** → Prompt Engineer **`character`**  
 2. Automation **`prompt_override`** → Prompt Engineer **`prompt_override_input`** (only needed if your scene file uses `[Prompt]`)  
-3. Automation **`selector`** (or Prompt Engineer **`selector_Out`**) → MiniMax / Model Switcher  
+3. Automation **`model_high`** / **`clip_high`** (and optional low) → Prompt Engineer same sockets when using Prompt **`[LoraH]`** / **`[LoraL]`**; then use Prompt Engineer’s model/clip outs downstream  
+4. Automation **`selector`** (or Prompt Engineer **`selector_Out`**) → MiniMax / Model Switcher  
 
 ## MiniMax-only tip
 

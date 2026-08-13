@@ -18,7 +18,7 @@ ComfyUI custom nodes: selectors, dual-stack subject/scene automation, text utili
 | **Lazy Prompt Saver** | Save / clone / delete named prompts in `lazy_prompts.json`. | [docs/nodes/lazy-prompt-saver.md](docs/nodes/lazy-prompt-saver.md) |
 | **Lazy Image Loader** | Load from `input/`: browse, drag-and-drop upload, open input folder, **cover crop** to popular ratios (default **9:16**), optional **megapixel resize** (0.2–4.0 MP, multiple of 32), live drag-to-position preview. Optional **`workflow_role`** + **`global_selector_input`** hard-gates `IMAGE`. | [docs/nodes/lazy-image-loader.md](docs/nodes/lazy-image-loader.md) |
 | **Lazy MiniMax All-in-One** | MiniMax H3 conditioner: auto T2V / I2V / FL2V / R2V from bare mode or automation **`selector`**. Seconds → H3 frame length. Requires ComfyUI 0.30+ native H3. | [docs/nodes/lazy-minimax-all-in-one.md](docs/nodes/lazy-minimax-all-in-one.md) |
-| **LazyPrompt** | Prompt Engineer (LTX / Wan / Flux / SDXL / Pony / SD 1.5), Vision Describe (Qwen2.5-VL), Unload local model. LM Studio API uses native `/api/v1/chat` with OpenAI fallback. Mode-gated first/last/refs + `selector_Out`. | [docs/nodes/lazyprompt.md](docs/nodes/lazyprompt.md) |
+| **LazyPrompt** | Prompt Engineer (LTX / Wan / Flux / SDXL / Pony / SD 1.5 / MiniMax H3), Vision Describe (Qwen2.5-VL), Unload local model. LM Studio API uses native `/api/v1/chat` with OpenAI fallback. Mode-gated first/last/refs + `selector_Out`. Prompt **`[LoraH]`** / **`[LoraL]`** dynamic LoRA loads. | [docs/nodes/lazyprompt.md](docs/nodes/lazyprompt.md) |
 
 **Documentation index:** [docs/README.md](docs/README.md) · MiniMax template: [docs/workflows/video_minimax_h3_global_selector.md](docs/workflows/video_minimax_h3_global_selector.md)
 
@@ -93,8 +93,9 @@ Full node reference: [lazy-subject-scene-automation-workflow.md](docs/workflows/
 - **`character`** ← **`subject_description`** from the automation node so the subject file’s **`[desciption]`** always reaches the LLM (including when **`prompt_override_input`** is set).  
 - **`scene_context`** ← **LazyPrompt — Vision Describe** (or paste text manually).  
 - **`image`**: optional reference frame for **LM Studio (API)** with a vision model loaded.  
+- Optional: wire automation **`model_high`** / **`clip_high`** (and low) into Prompt Engineer when the Prompt / LLM emits **`[LoraH]…[/LoraH]`** / **`[LoraL]…[/LoraL]`** — those load after the LLM and are stripped from **`PROMPT`**.  
 - Set **`target_model`**, **`model`** (e.g. **LM Studio (API)**), **`lm_studio_model`**, and token/temperature as needed.  
-- Use output **`PROMPT`** downstream (encode, preview, etc.).
+- Use output **`PROMPT`** (and model/clip outs when wired) downstream.
 
 **3. LazyPrompt — Vision Describe (optional)**  
 - **`image`** ← **Lazy Image Loader** or **Load Image** (or any IMAGE output).  
@@ -103,7 +104,7 @@ Full node reference: [lazy-subject-scene-automation-workflow.md](docs/workflows/
 
 **4. Scenario file tips for this graph**  
 - **`[desciption]`** → merged into automation **`prompt`** (CLIP-side text).  
-- **`[Prompt]`** → sent on **`prompt_override`** only (LLM path); mutually exclusive with **`[desciption]`** in the same file.  
+- **`[Prompt]`** → sent on **`prompt_override`** only (LLM path); mutually exclusive with **`[desciption]`** in the same file. Optional closed **`[LoraH]`** / **`[LoraL]`** tags in that Prompt (or LLM output) are handled by LazyPrompt after enhancement.  
 - **`{left|right}`** in scenario text → random choice each queue run.  
 - **`scenario_2`** + strength sliders → second scenario LoRA set and tunable `[LoraHighA]` / `[LoraLowA]` model strength.
 
