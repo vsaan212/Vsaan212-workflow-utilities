@@ -1,6 +1,6 @@
 # Vsaan212-workflow-utilities
 
-ComfyUI custom nodes: selectors, dual-stack subject/scene automation, text utilities, optional LoRA bypass, prompt library, **Lazy Image Loader**, **Lazy MiniMax All-in-One** (H3), **Lazy Switch** (float/int/text), **Lazy Docs** (Markdown viewer), and **LazyPrompt** (multi-target prompt engineer + optional vision). MIT licensed.
+ComfyUI custom nodes: selectors, dual-stack subject/scene automation, text utilities, optional LoRA bypass, prompt library, **Lazy Image Loader**, **Lazy Multi Frame Select**, **Lazy MiniMax All-in-One** (H3), **Lazy Switch** (float/int/text), **Lazy Docs** (Markdown viewer), and **LazyPrompt** (multi-target prompt engineer + optional vision). MIT licensed.
 
 ## Nodes (summary)
 
@@ -17,6 +17,7 @@ ComfyUI custom nodes: selectors, dual-stack subject/scene automation, text utili
 | **Optional Switch LoRA** | Apply a LoRA or pass through when path is `bypass` / empty. | [docs/nodes/optional-switch-lora.md](docs/nodes/optional-switch-lora.md) |
 | **Lazy Prompt Saver** | Save / clone / delete named prompts in `lazy_prompts.json`. | [docs/nodes/lazy-prompt-saver.md](docs/nodes/lazy-prompt-saver.md) |
 | **Lazy Image Loader** | Load from `input/`: browse, drag-and-drop upload, open input folder, **cover crop** to popular ratios (default **9:16**), optional **megapixel resize** (0.2–4.0 MP, multiple of 32), live drag-to-position preview. Optional **`workflow_role`** + **`global_selector_input`** hard-gates `IMAGE`. | [docs/nodes/lazy-image-loader.md](docs/nodes/lazy-image-loader.md) |
+| **Lazy Multi Frame Select** | IMAGE batch from **VAE Decode** → grid of all frames, **pauses** until you pick up to **6** and click **Continue**. Six IMAGE outputs (`image_1`–`image_6`). | [docs/nodes/lazy-multi-frame-select.md](docs/nodes/lazy-multi-frame-select.md) |
 | **Lazy MiniMax All-in-One** | MiniMax H3 conditioner: auto T2V / I2V / FL2V / R2V from bare mode or automation **`selector`**. Seconds → H3 frame length. Requires ComfyUI 0.30+ native H3. | [docs/nodes/lazy-minimax-all-in-one.md](docs/nodes/lazy-minimax-all-in-one.md) |
 | **LazyPrompt** | Prompt Engineer (LTX / Wan / Flux / SDXL / Pony / SD 1.5 / MiniMax H3), Vision Describe (Qwen2.5-VL), Unload local model. LM Studio API uses native `/api/v1/chat` with OpenAI fallback. Mode-gated first/last/refs + `selector_Out`. Prompt **`[LoraH]`** / **`[LoraL]`** dynamic LoRA loads. | [docs/nodes/lazyprompt.md](docs/nodes/lazyprompt.md) |
 
@@ -67,6 +68,8 @@ Put `.txt` files under the folder that matches the node you use. Dropdowns show 
 **Lazy-subject-and-scene-automation** parses tagged files internally. The browser extension **`js/lazy_subject_scene_live.js`** adds editable **subject / scenario / scenario 2** panes, **Save edits**, and **scenario 2 high/low strength** sliders (see [lazy-subject-scene-automation.md](docs/nodes/lazy-subject-scene-automation.md)). For **Subject Selector** / **Scenario Selector** → **Text Split**, v2 files (first line `[LoraHighA]`) split automatically; legacy `#` files use separator `#` unless you force **`tagged_format` ON**. Text Split details: [text-split.md](docs/nodes/text-split.md).
 
 **Lazy Image Loader** reads from ComfyUI’s global **`input/`** folder (not a pack subfolder). Extension **`js/lazy_image_loader.js`** adds the preview, pan crop, upload, and **Open input folder** button. Details: [lazy-image-loader.md](docs/nodes/lazy-image-loader.md).
+
+**Lazy Multi Frame Select** sits after **VAE Decode**. Extension **`js/lazy_multi_frame_select.js`** shows every decoded frame in a grid, waits for up to six clicks, then **Continue** emits `image_1`–`image_6`. Details: [lazy-multi-frame-select.md](docs/nodes/lazy-multi-frame-select.md).
 
 ## Example workflow (Lazy automation + LazyPrompt)
 
@@ -131,6 +134,7 @@ Install from `requirements.txt` if your ComfyUI environment is missing anything 
 - **Same filename in two folders:** Use the full relative path in the dropdown.
 - **Line endings:** Nodes normalize `\r\n` / `\r` to `\n`.
 - **Lazy Image Loader missing from menu:** Restart ComfyUI after updating the pack; node is under **`vsaan212/lazy`**.
+- **Lazy Multi Frame Select grid empty / won’t continue:** Restart ComfyUI so `js/lazy_multi_frame_select.js` loads; click **Continue** on the node (do not queue a second prompt).
 
 ## License
 MIT (see `LICENSE`)

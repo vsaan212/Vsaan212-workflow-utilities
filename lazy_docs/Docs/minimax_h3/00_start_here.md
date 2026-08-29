@@ -19,6 +19,7 @@ Then click the titles on the left to read each page.
 2. How **subject** and **scene** files work (character + situation)  
 3. How to plug in a **local LLM** (LM Studio, built-in Hugging Face models, or TextGenerate)  
 4. **Prompt examples** you can copy and adapt  
+5. How to **pick stills** from a decoded clip (Lazy Multi Frame Select)  
 
 ## Before you start
 

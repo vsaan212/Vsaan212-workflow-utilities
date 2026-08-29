@@ -15,6 +15,7 @@ Think of the graph as a **video studio remote control**:
 | **LazyPrompt** | Optional helper: turns a short idea into a long MiniMax-style prompt using an LLM. |
 | **Lazy MiniMax All-in-One** | Builds the video conditioning the MiniMax model needs. |
 | **Lazy Model Switcher** | Picks the right UNET (normal video vs reference video). |
+| **Lazy Multi Frame Select** | After **VAE Decode**: grid of every frame, pause, pick up to six stills, Continue. |
 
 ## Modes in one sentence each
 

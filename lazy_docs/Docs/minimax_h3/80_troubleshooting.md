@@ -5,6 +5,12 @@ index: 80
 
 # Troubleshooting
 
+## Lazy Multi Frame Select grid is empty / prompt stuck executing
+
+- Restart ComfyUI after updating the pack so `js/lazy_multi_frame_select.js` loads.  
+- Click **Continue** on that node. Do **not** queue a second prompt to confirm the pick.  
+- **Cancel** on the node (or ComfyUI stop) ends the wait. **Clear** only deselects frames.
+
 ## SamplerCustomAdvanced / float division by zero (T2V only)
 
 MiniMax builds a spatial layout from latent **width × height**. In T2V the first-frame loader correctly emits no image and **`0×0`** size. If Auto width/height still takes “from first frame” for every non-R2V mode, the empty latent is `0×0` and sampling crashes inside `PackedLayout`.

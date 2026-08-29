@@ -1,4 +1,4 @@
-__version__ = "1.13.0"
+__version__ = "1.14.0"
 __author__ = "Vsaan212"
 __title__ = "Vsaan212 Workflow Utilities"
 # custom_nodes/vsaan212_workflow_utilities/__init__.py
@@ -133,6 +133,16 @@ try:
 except Exception:
     LIL_CLASSES = {}
     LIL_DISPLAY = {}
+
+# Lazy Multi Frame Select (VAE Decode grid picker, pause until Continue)
+try:
+    from .lazy_multi_frame_select import (
+        NODE_CLASS_MAPPINGS as LMFS_CLASSES,
+        NODE_DISPLAY_NAME_MAPPINGS as LMFS_DISPLAY,
+    )
+except Exception:
+    LMFS_CLASSES = {}
+    LMFS_DISPLAY = {}
 
 # Lazy MiniMax H3 all-in-one conditioner
 try:
@@ -302,6 +312,9 @@ NODE_DISPLAY_NAME_MAPPINGS.update(PG_DISPLAY)
 
 NODE_CLASS_MAPPINGS.update(LIL_CLASSES)
 NODE_DISPLAY_NAME_MAPPINGS.update(LIL_DISPLAY)
+
+NODE_CLASS_MAPPINGS.update(LMFS_CLASSES)
+NODE_DISPLAY_NAME_MAPPINGS.update(LMFS_DISPLAY)
 
 NODE_CLASS_MAPPINGS.update(MM_CLASSES)
 NODE_DISPLAY_NAME_MAPPINGS.update(MM_DISPLAY)
