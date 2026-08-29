@@ -44,7 +44,7 @@ Sockets are hard-gated by the resolved mode (unused frames/refs are ignored even
 
 1. Put `[Workflow]`, `[ReferenceImage1]`…`[ReferenceImage5]`, `[AudioReference]` in subject and/or scenario `.txt` files (before `[desciption]` / `[Prompt]`).
 2. Paths are relative to ComfyUI `input/` (e.g. `chars/hero.png` or `input/chars/hero.png`). Backslashes are fine on Windows.
-3. Wire automation **`selector`** → this node’s **`selector`**, or a bare mode from [Lazy Global Selector](lazy-global-selector.md). Non-empty selector path fields override sockets.
+3. Wire automation **`selector`** → this node’s **`selector`**, or a bare mode from [Lazy Global Selector](lazy-global-selector.md). Disk `[ReferenceImageN]` / `[AudioReference]` overlay matching Autogrow slots only (`ref_image_1`, `ref_audio_1`); other wired refs stay.
 4. For UNET routing, wire mode → [Lazy Model Switcher](lazy-model-switcher.md).
 
 Audio files (`.wav` / etc.) are loaded via **soundfile** or stdlib **wave**, not torchcodec — Easy-Install embeds often hit a broken `libtorchcodec_core*.dll` entry-point error if torchaudio defaults to torchcodec.

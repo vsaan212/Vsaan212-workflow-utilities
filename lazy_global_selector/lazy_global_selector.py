@@ -1,6 +1,7 @@
 """Lazy Global Selector — one dropdown for T2V / I2V / FL2V / R2V."""
 from __future__ import annotations
 
+from ..lazy_logging import debug
 from ..workflow_modes import MODES
 
 
@@ -14,7 +15,8 @@ class LazyGlobalSelector:
                     {
                         "default": "I2V",
                         "tooltip": (
-                            "Workflow mode fan-out: wire to Image Loaders, SAS, "
+                            "Workflow mode fan-out: wire to Image Loaders, SAS "
+                            "(selector blob only — does not switch High/Low/Minimax), "
                             "Prompt Engineer, MiniMax, and Model Switcher."
                         ),
                     },
@@ -28,6 +30,7 @@ class LazyGlobalSelector:
     CATEGORY = "vsaan212/automation"
 
     def select(self, workflow_type: str):
+        debug("Lazy Global Selector", f"emitting {workflow_type}")
         return (workflow_type,)
 
 

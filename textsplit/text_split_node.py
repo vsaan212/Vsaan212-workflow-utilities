@@ -2,6 +2,8 @@ import re
 import sys
 from typing import List, Tuple
 
+from ..lazy_logging import debug
+
 # Version compatibility check
 MIN_PYTHON_VERSION = (3, 7)
 if sys.version_info < MIN_PYTHON_VERSION:
@@ -128,6 +130,10 @@ class TextSplitNode:
             return tuple([""] * 9)
 
         use_tagged = _first_line_is_lorahigha(text) or tagged_format
+        debug(
+            "Text Split",
+            f"{'tagged' if use_tagged else 'separator'} split num_splits={num_splits}",
+        )
 
         if use_tagged:
             parts = _split_tagged_sections(text, trim_whitespace=trim_whitespace)

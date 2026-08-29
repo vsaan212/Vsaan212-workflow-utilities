@@ -48,7 +48,7 @@ Important words:
 - **`bypass`** — skip that LoRA slot (case does not matter).  
 - **`[desciption]`** — yes, that spelling is intentional in this pack. Body text under it is the character/scene description.  
 - **`[Prompt]`** — optional full prompt block on a **scenario** file. When present, the automation node outputs it as **`prompt_override`** for LazyPrompt (it can replace your short `user_input`).  
-  Inside **`[Prompt]`** (or LLM output), you may also use closed **`[LoraH]path[/LoraH]`** / **`[LoraL]path[/LoraL]`** tags. LazyPrompt loads those onto **`model_high`** / **`model_low`** after the LLM and strips them from the text. Do **not** put those closed tags under **`[desciption]`** — file LoRAs stay on `[LoraHighA]` / `[LoraLowA]` slots.  
+  Inside **`[Prompt]`** (or LLM output), you may also use closed Prompt-side tags. **`[LoraH]path[/LoraH]`** / **`[LoraL]path[/LoraL]`** load on LazyPrompt **`model_high`** / **`model_low`**. **`[Lora1]`**–**`[Lora5]`** (optional strength `[Lora1[0.5]]path[/Lora1]`) load on **`lora_model`**. LazyPrompt applies them after the LLM and strips them from the text. Do **not** put those closed tags under **`[desciption]`** — file LoRAs stay on `[LoraHighA]` / `[VideoModelLoraA]` slots.  
 - **`[KeywordA]`** etc. — short trigger words joined into the **keywords** output.
 
 You can also write strengths on the tag line:

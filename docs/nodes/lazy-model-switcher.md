@@ -20,4 +20,4 @@ Picks the diffusion UNET from the workflow mode string so one KSampler path can 
 
 ## Wiring
 
-Wire both UNET loaders in, then `selector_in` from **Lazy Global Selector**, Prompt Engineer `selector_Out`, or SAS `selector`. Feed the output into your guider / sampler.
+Wire both UNET loaders in, then `selector_in` from **Lazy Global Selector**, Prompt Engineer `selector_Out`, or SAS `selector`. Feed the output into **Lazy-subject-and-scene-automation** **`minimax_model`** (then that output into your guider / sampler). Global Selector does not pick the UNET — this node does.

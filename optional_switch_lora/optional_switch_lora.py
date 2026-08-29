@@ -5,6 +5,8 @@ import os
 from comfy import model_management
 from nodes import LoraLoader
 
+from ..lazy_logging import debug
+
 class OptionalSwitchLoRA:
     @classmethod
     def INPUT_TYPES(cls):
@@ -27,7 +29,7 @@ class OptionalSwitchLoRA:
         # normalize
         cmd = (command_or_path or "").strip().strip('"').strip("'")
         if cmd.lower() == "bypass" or cmd == "":
-            # explicit bypass or empty -> return unchanged
+            debug("Optional Switch LoRA", "bypassed")
             return (model, clip)
 
         # treat cmd as a path or a basename; if it's a path, register its dir
@@ -40,7 +42,7 @@ class OptionalSwitchLoRA:
             # treat as a name that should already be discoverable by LoraLoader
             lora_name = cmd
 
-        # delegate to stock LoraLoader (keeps existing behavior)
+        debug("Optional Switch LoRA", f'loading "{lora_name}"')
         loader = LoraLoader()
         out_model, out_clip = loader.load_lora(model, clip, lora_name, strength_model, strength_clip)
         return (out_model, out_clip)

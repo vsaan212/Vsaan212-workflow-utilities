@@ -1,6 +1,8 @@
 import os
 from typing import List
 
+from ..lazy_logging import debug
+
 
 class ComfyUI_ScenarioSelector:
     """
@@ -81,6 +83,7 @@ class ComfyUI_ScenarioSelector:
             with open(file_path, "r", encoding="utf-8") as f:
                 content = f.read().strip().replace("\r\n", "\n").replace("\r", "\n")
             preview = f"Loaded: {rel_no_ext}.txt"
+            debug("Scenario Selector", f'loaded "{rel_no_ext}.txt"')
         except Exception as e:
             content = f"Error loading scenario file: {e}"
             preview = f"Failed to load: {rel_no_ext}.txt"

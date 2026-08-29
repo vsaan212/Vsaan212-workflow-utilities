@@ -1,6 +1,7 @@
 """Lazy Model Switcher — pick FL2V vs R2V UNET from workflow mode."""
 from __future__ import annotations
 
+from ..lazy_logging import debug
 from ..workflow_modes import resolve_mode_from_selector
 
 
@@ -35,8 +36,17 @@ class LazyModelSwitcher:
     def switch(self, ref2video_model, text_img_fl2v_model, selector_in: str = ""):
         mode = resolve_mode_from_selector(selector_in)
         if mode == "R2V":
-            return (ref2video_model,)
-        return (text_img_fl2v_model,)
+            chosen = "ref2video_model"
+            out = ref2video_model
+        else:
+            chosen = "text_img_fl2v_model"
+            out = text_img_fl2v_model
+        shown = (selector_in or "").strip().splitlines()[0] if (selector_in or "").strip() else "(empty)"
+        debug(
+            "Lazy Model Switcher",
+            f'set to "{shown}" selecting {chosen}',
+        )
+        return (out,)
 
 
 NODE_CLASS_MAPPINGS = {

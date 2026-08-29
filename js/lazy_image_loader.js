@@ -52,6 +52,43 @@ function hideWidgetRow(w) {
     } catch (_) {}
 }
 
+function isOurPreviewWidget(w) {
+    return w?.name === "lazy_image_preview";
+}
+
+function isComfyNativeImagePreview(w) {
+    if (!w || isOurPreviewWidget(w)) return false;
+    const name = String(w.name || "");
+    const type = String(w.type || "");
+    const typeLc = type.toLowerCase();
+    if (name.startsWith("$$")) return true;
+    if (name === "upload") return true;
+    if (type === "IMAGEUPLOAD" || typeLc === "imageupload") return true;
+    if (type === "IMAGE_PREVIEW" || typeLc === "image_preview") return true;
+    if (typeLc === "img") return true;
+    return false;
+}
+
+/** Hide Comfy's combo thumbnail (`$$canvas-image-preview` / IMAGEUPLOAD). */
+function hideComfyNativeImagePreview(node) {
+    if (!node) return;
+    if (node.imgs) node.imgs = undefined;
+    if (!node.widgets) return;
+    for (const w of node.widgets) {
+        if (!isComfyNativeImagePreview(w)) continue;
+        if (w.hidden === true && w.options?.hidden === true) continue;
+        w.hidden = true;
+        w.options = w.options || {};
+        w.options.hidden = true;
+        w.computeSize = () => [0, -4];
+        hideWidgetRow(w);
+        try {
+            const el = w.inputEl || w.domEl || w.element;
+            if (el?.style) el.style.display = "none";
+        } catch (_) {}
+    }
+}
+
 function showWidgetRow(w) {
     if (!w) return;
     if (w.hidden !== undefined) w.hidden = false;
@@ -157,6 +194,7 @@ function buildUi(node) {
     hideWidgetRow(offsetYW);
     hideWidgetRow(zoomW);
     hideWidgetRow(flipW);
+    hideComfyNativeImagePreview(node);
     setMegapixelsVisibility(node);
 
     if (resizeMpW) {
@@ -173,7 +211,7 @@ function buildUi(node) {
     const root = document.createElement("div");
     root.className = "vsaan-lazy-image-loader";
     root.style.cssText =
-        "display:flex;flex-direction:column;gap:6px;margin:4px 0;font-size:12px;";
+        "display:flex;flex-direction:column;gap:6px;margin:4px 0;font-size:12px;overflow:hidden;";
 
     const toolbar = document.createElement("div");
     toolbar.style.cssText = "display:flex;flex-wrap:wrap;gap:6px;";
@@ -231,10 +269,10 @@ function buildUi(node) {
 
     const frame = document.createElement("div");
     frame.style.cssText =
-        "position:relative;margin:0 auto;border:1px solid rgba(255,255,255,0.22);border-radius:8px;overflow:hidden;background:#111;touch-action:none;";
+        "position:relative;margin:0 auto;border:1px solid rgba(255,255,255,0.22);border-radius:8px;overflow:hidden;background:#111;touch-action:none;flex-shrink:0;";
 
     const canvas = document.createElement("canvas");
-    canvas.style.cssText = "display:block;width:100%;height:100%;cursor:grab;";
+    canvas.style.cssText = "display:block;cursor:grab;";
     frame.appendChild(canvas);
 
     const dropOverlay = document.createElement("div");
@@ -304,6 +342,9 @@ function buildUi(node) {
         frame.style.height = `${fh}px`;
         canvas.width = fw;
         canvas.height = fh;
+        canvas.style.width = `${fw}px`;
+        canvas.style.height = `${fh}px`;
+        node._lazyPreviewMinHeight = 36 + 22 + fh + 58 + 22;
     }
 
     function drawPreview() {
@@ -369,12 +410,15 @@ function buildUi(node) {
 
     async function refreshImageList(selectName) {
         const names = await fetchImageList();
+        const choices = [""].concat(names);
         state.suppressImageCb = true;
         try {
-            if (imageW.options) imageW.options.values = names;
+            if (imageW.options) imageW.options.values = choices;
             const keep = selectName || imageW.value;
             if (keep && names.includes(keep)) {
                 imageW.value = keep;
+            } else if (!keep) {
+                imageW.value = "";
             } else if (names.length && !names.includes(imageW.value)) {
                 imageW.value = names[0];
             }
@@ -538,11 +582,32 @@ function buildUi(node) {
         zone.addEventListener("drop", (e) => {
             e.preventDefault();
             e.stopPropagation();
+            if (typeof e.stopImmediatePropagation === "function") {
+                e.stopImmediatePropagation();
+            }
             dropOverlay.style.display = "none";
             const file = e.dataTransfer?.files?.[0];
             if (file) handleFile(file);
         });
     }
+
+    node.onDragOver = function (e) {
+        return !!e?.dataTransfer?.types?.includes?.("Files");
+    };
+    node.onDragDrop = function (e) {
+        // Drop landed on this (or another) loader preview — DOM handler owns it.
+        // Returning true stops Comfy image_upload from applying the file to a
+        // neighboring node whose LiteGraph hitbox overlaps the preview below.
+        if (e?.target?.closest?.(".vsaan-lazy-image-loader")) {
+            return true;
+        }
+        const file = e?.dataTransfer?.files?.[0];
+        if (file?.type?.startsWith("image/")) {
+            handleFile(file);
+            return true;
+        }
+        return false;
+    };
 
     const onImageChange = (explicit) => {
         if (state.suppressImageCb) return;
@@ -550,6 +615,7 @@ function buildUi(node) {
         setWidgetValue(node, "offset_y", 0);
         setWidgetValue(node, "zoom", 1);
         syncPreviewFromWidget(explicit);
+        hideComfyNativeImagePreview(node);
     };
 
     const origImageCb = imageW.callback;
@@ -582,6 +648,7 @@ function buildUi(node) {
 
     // Keep transform canvas aligned with the combo after workflow load / R refresh.
     const syncIfStale = () => {
+        hideComfyNativeImagePreview(node);
         const current = selectedImageName();
         if (current && current !== state.imgName) {
             loadPreview(current);
@@ -594,6 +661,8 @@ function buildUi(node) {
     queueMicrotask(() => syncPreviewFromWidget());
     setTimeout(() => syncPreviewFromWidget(), 0);
     setTimeout(() => syncPreviewFromWidget(), 100);
+    setTimeout(() => hideComfyNativeImagePreview(node), 0);
+    setTimeout(() => hideComfyNativeImagePreview(node), 120);
 
     return root;
 }
@@ -604,32 +673,46 @@ app.registerExtension({
     async beforeRegisterNodeDef(nodeType, nodeData) {
         if (nodeData.name !== NODE_CLASS) return;
 
+        // Strip Comfy's IMAGEUPLOAD injection (native thumbnail under the node).
+        try {
+            const imgSpec = nodeData.input?.required?.image;
+            if (Array.isArray(imgSpec) && imgSpec[1] && typeof imgSpec[1] === "object") {
+                delete imgSpec[1].image_upload;
+            }
+            if (nodeData.input?.required) delete nodeData.input.required.upload;
+        } catch (_) {}
+
         const origOnNodeCreated = nodeType.prototype.onNodeCreated;
         nodeType.prototype.onNodeCreated = function () {
             const r = origOnNodeCreated?.apply(this, arguments);
             const node = this;
             const uiRoot = buildUi(node);
             node.addDOMWidget("lazy_image_preview", "preview", uiRoot, {
-                getMinHeight: () => 460,
-                getMaxHeight: () => 560,
+                getMinHeight: () => node._lazyPreviewMinHeight ?? 320,
+                getMaxHeight: () => Math.max(node._lazyPreviewMinHeight ?? 320, 420),
             });
-            node.setSize?.([Math.max(node.size?.[0] ?? 0, 300), Math.max(node.size?.[1] ?? 0, 560)]);
+            hideComfyNativeImagePreview(node);
+            node.setSize?.([
+                Math.max(node.size?.[0] ?? 0, 300),
+                Math.max(node.size?.[1] ?? 0, (node._lazyPreviewMinHeight ?? 320) + 140),
+            ]);
             return r;
         };
 
         const origOnConfigure = nodeType.prototype.onConfigure;
         nodeType.prototype.onConfigure = function (info) {
             const r = origOnConfigure?.apply(this, arguments);
+            hideComfyNativeImagePreview(this);
             // After workflow JSON applies widget values, resync the crop preview.
             queueMicrotask(() => this._lazyImageSyncPreview?.());
             setTimeout(() => this._lazyImageSyncPreview?.(), 50);
             return r;
         };
 
-        const origOnDrawForeground = nodeType.prototype.onDrawForeground;
-        nodeType.prototype.onDrawForeground = function (...args) {
-            const r = origOnDrawForeground?.apply(this, args);
-            this._lazyImageSyncPreview?.();
+        const origOnDrawBackground = nodeType.prototype.onDrawBackground;
+        nodeType.prototype.onDrawBackground = function (ctx) {
+            const r = origOnDrawBackground?.apply(this, arguments);
+            hideComfyNativeImagePreview(this);
             return r;
         };
     },

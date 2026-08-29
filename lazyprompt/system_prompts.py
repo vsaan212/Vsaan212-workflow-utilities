@@ -21,6 +21,16 @@ _ICON_BY_TYPE = {
     "sound": "\U0001f50a",  # 🔊
 }
 
+_VIDEO_LENGTH_BLOCK_RE = re.compile(
+    r"\*\*\*VideoLength\*\*\*.*?\*\*\*VideoLengthEnd\*\*\*",
+    re.DOTALL | re.IGNORECASE,
+)
+_VIDEO_LENGTH_SECTION_RE = re.compile(
+    r"(?:"
+    r"(?:^|\n)---\s*\nCLIP DURATION SLOT:.*?"
+    r")?\*\*\*VideoLength\*\*\*.*?\*\*\*VideoLengthEnd\*\*\*",
+    re.DOTALL | re.IGNORECASE,
+)
 _USER_PROMPT_BLOCK_RE = re.compile(
     r"\*\*\*UserPrompt\*\*\*.*?\*\*\*UserPromptEnd\*\*\*",
     re.DOTALL | re.IGNORECASE,
@@ -302,6 +312,35 @@ def is_wan_skill(target_model: str) -> bool:
     if skill is not None:
         return "wan" in skill.model_name.lower()
     return "Wan" in (target_model or "")
+
+
+def apply_video_length_slot(system_prompt: str, video_length_sec: float) -> str:
+    """Fill or strip ***VideoLength*** … ***VideoLengthEnd*** in a skill template.
+
+    Video runs with duration > 0 write e.g. ``8s`` between the markers.
+    Image runs, zero duration, or missing markers: the whole slot section is removed.
+    """
+    text = system_prompt or ""
+    if not _VIDEO_LENGTH_BLOCK_RE.search(text):
+        return text
+    duration = float(video_length_sec or 0.0)
+    if duration <= 0:
+        cleaned = _VIDEO_LENGTH_SECTION_RE.sub("", text)
+        return re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+    dur = f"{round(duration, 2):g}s"
+    replacement = f"***VideoLength***\n{dur}\n***VideoLengthEnd***"
+    return _VIDEO_LENGTH_BLOCK_RE.sub(replacement, text, count=1)
+
+
+def apply_skill_runtime(
+    system_prompt: str,
+    *,
+    user_instructions: str = "",
+    video_length_sec: float = 0.0,
+) -> str:
+    """Apply all skill-file runtime slots (UserPrompt, VideoLength)."""
+    text = apply_user_prompt_injection(system_prompt, user_instructions)
+    return apply_video_length_slot(text, video_length_sec)
 
 
 def apply_user_prompt_injection(system_prompt: str, user_instructions: str) -> str:

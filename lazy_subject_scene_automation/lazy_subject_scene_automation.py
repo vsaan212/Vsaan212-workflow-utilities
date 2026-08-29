@@ -1,8 +1,12 @@
 """
 Lazy Subject + Scene Automation — combines subject/scenario file parsing,
-optional LoRA bypass behavior, and prompt assembly for Wan 2.1 / 2.2 style stacks.
+optional LoRA bypass behavior, and prompt assembly.
 
-Tagged (v2) files use unified slot names: LoraHighA/LoraLowA through LoraHighC/LoraLowC
+Wan dual-stack: model_high / model_low with LoraHighA–C / LoraLowA–C.
+Singular models: minimax_model (MiniMax H3), video_model (LTX 2.x),
+image_model (Krea2 / Z-Image / Flux) with VideoModelLoraA–D / ImageModelLoraA–D.
+
+Tagged (v2) files keep LoraHighA/LoraLowA through LoraHighC/LoraLowC
 in both subject and scenario files; older SubjectLora* / ScenarioLora* tags remain supported.
 """
 from __future__ import annotations
@@ -14,6 +18,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from comfy import model_management
 from nodes import LoraLoader
+
+from ..lazy_logging import debug
 
 ApplySlot = Tuple[str, float, float]  # path, strength_model, strength_clip
 
@@ -271,6 +277,14 @@ _KNOWN_V2_SECTION_TAGS = frozenset(
         "loralowb",
         "lorahighc",
         "loralowc",
+        "imagemodelloraa",
+        "imagemodellorab",
+        "imagemodellorac",
+        "imagemodellorad",
+        "videomodelloraa",
+        "videomodellorab",
+        "videomodellorac",
+        "videomodellorad",
         "keyworda",
         "keywordb",
         "keywordc",
@@ -565,6 +579,69 @@ def _prompt_from_blocks(blocks: Dict[str, Tuple[str, float, float]]) -> str:
     return ""
 
 
+_IMAGE_LORA_TAGS = (
+    "ImageModelLoraA",
+    "ImageModelLoraB",
+    "ImageModelLoraC",
+    "ImageModelLoraD",
+)
+_VIDEO_LORA_TAGS = (
+    "VideoModelLoraA",
+    "VideoModelLoraB",
+    "VideoModelLoraC",
+    "VideoModelLoraD",
+)
+_VIDEO_LENGTH_TOKEN = "[video_length]"
+
+
+def _lora_slots_from_blocks(
+    blocks: Dict[str, Tuple[str, float, float]], *tag_names: str
+) -> List[ApplySlot]:
+    out: List[ApplySlot] = []
+    for name in tag_names:
+        b = blocks.get(_norm_tag(name))
+        if not b:
+            continue
+        slot = _slot_from_block(*b)
+        if slot:
+            out.append(slot)
+    return out
+
+
+def _singular_stacks_from_text(content: str) -> Tuple[List[ApplySlot], List[ApplySlot]]:
+    """ImageModelLoraA–D and VideoModelLoraA–D from a v2 file. v1 → empty."""
+    content = (content or "").strip().replace("\r\n", "\n").replace("\r", "\n")
+    if not content or not _is_tagged_format(content):
+        return [], []
+    blocks = _parse_tagged_blocks(content)
+    return (
+        _lora_slots_from_blocks(blocks, *_IMAGE_LORA_TAGS),
+        _lora_slots_from_blocks(blocks, *_VIDEO_LORA_TAGS),
+    )
+
+
+def _format_video_length_value(seconds: float) -> str:
+    n = max(0.0, float(seconds))
+    text = f"{n:.2f}".rstrip("0").rstrip(".")
+    return f"{text}s"
+
+
+def _inject_video_length(text: str, seconds: float, *, append_if_missing: bool) -> str:
+    """Replace [video_length] tokens. Does not touch [Time] (time of day)."""
+    if seconds is None or float(seconds) <= 0:
+        return text or ""
+    value = _format_video_length_value(seconds)
+    body = text or ""
+    if _VIDEO_LENGTH_TOKEN in body:
+        return body.replace(_VIDEO_LENGTH_TOKEN, value)
+    if not append_if_missing:
+        return body
+    block = f"{_VIDEO_LENGTH_TOKEN}\n{value}"
+    if not body.strip():
+        return block
+    return body.rstrip() + "\n\n" + block
+
+
 def _block_body(blocks: Dict[str, Tuple[str, float, float]], tag: str) -> str:
     b = blocks.get(_norm_tag(tag))
     if not b:
@@ -754,7 +831,15 @@ def _resolve_lora_name(cmd: str) -> str:
     return path
 
 
-def _apply_stack(model, clip, stack: List[ApplySlot]):
+def _apply_stack(model, clip, stack: List[ApplySlot], *, dest: str = "model"):
+    if model is None:
+        for path, sm, cm in stack:
+            if _bypass_path(path):
+                continue
+            debug("SAS", f'skipped lora "{path}" — {dest} not wired')
+        return None, clip
+    if not stack:
+        return model, clip
     loader = LoraLoader()
     for path, sm, cm in stack:
         if _bypass_path(path):
@@ -762,6 +847,13 @@ def _apply_stack(model, clip, stack: List[ApplySlot]):
         lora_name = _resolve_lora_name(path)
         if not lora_name or lora_name.lower() == "bypass":
             continue
+        if clip is None:
+            debug(
+                "SAS",
+                f'skipped lora "{path}" on {dest} — CLIP not wired (needed as LoRA companion)',
+            )
+            continue
+        debug("SAS", f'added lora "{path}"')
         model, clip = loader.load_lora(model, clip, lora_name, sm, cm)
     return model, clip
 
@@ -921,24 +1013,6 @@ class LazySubjectSceneAutomation:
             scen_choices = ["none"]
         return {
             "required": {
-                "model_high": (
-                    "MODEL",
-                    {
-                        "tooltip": (
-                            "Primary model branch (required). For dual-stack Wan workflows, "
-                            "also wire model_low; for single-model graphs (e.g. Z-Image), leave low unwired."
-                        ),
-                    },
-                ),
-                "clip_high": (
-                    "CLIP",
-                    {
-                        "tooltip": (
-                            "Primary CLIP branch (required). Pair with model_high; "
-                            "wire clip_low only for dual high/low stacks."
-                        ),
-                    },
-                ),
                 "subject": (subj_choices,),
                 "scenario": (scen_choices,),
                 "scenario_2": (
@@ -999,15 +1073,47 @@ class LazySubjectSceneAutomation:
                         ),
                     },
                 ),
+                "video_length": (
+                    "FLOAT",
+                    {
+                        "default": 0.0,
+                        "min": 0.0,
+                        "max": 300.0,
+                        "step": 0.25,
+                        "tooltip": (
+                            "Clip duration in seconds. Replaces [video_length] in prompt / "
+                            "prompt_override, or appends a [video_length] block. Prompt Engineer "
+                            "keeps that block in the LLM user message. 0 skips (still-image graphs). "
+                            "Does not touch [Time] (time of day)."
+                        ),
+                    },
+                ),
             },
             "optional": {
+                "model_high": (
+                    "MODEL",
+                    {
+                        "tooltip": (
+                            "Wan high-noise branch. Receives LoraHighA–C. "
+                            "Not MiniMax / Krea2 / LTX — use those singular sockets instead."
+                        ),
+                    },
+                ),
+                "clip_high": (
+                    "CLIP",
+                    {
+                        "tooltip": (
+                            "CLIP for the Wan high-noise branch, and LoRA companion for "
+                            "MiniMax / image / video models when those sockets have no CLIP."
+                        ),
+                    },
+                ),
                 "model_low": (
                     "MODEL",
                     {
                         "tooltip": (
-                            "Optional second MODEL branch (Wan low-noise, or MiniMax R2V UNET). "
-                            "Passed through even without clip_low — Low LoRA slots still apply "
-                            "to this model (clip_high is used only as the LoRA companion)."
+                            "Wan low-noise branch only. Receives LoraLowA–C. "
+                            "Leave unwired for single-model graphs. MiniMax R2V belongs on minimax_model."
                         ),
                     },
                 ),
@@ -1015,8 +1121,34 @@ class LazySubjectSceneAutomation:
                     "CLIP",
                     {
                         "tooltip": (
-                            "Optional second CLIP for dual high/low stacks. "
-                            "Omit for single-CLIP graphs (e.g. MiniMax); model_low still passes through."
+                            "CLIP for the Wan low-noise branch. Omit for single-CLIP graphs."
+                        ),
+                    },
+                ),
+                "minimax_model": (
+                    "MODEL",
+                    {
+                        "tooltip": (
+                            "Singular video UNET: MiniMax H3. Wire Lazy Model Switcher here "
+                            "(TxtImg2Vid vs reference). Receives VideoModelLoraA–D."
+                        ),
+                    },
+                ),
+                "image_model": (
+                    "MODEL",
+                    {
+                        "tooltip": (
+                            "Singular image model: Krea2, Z-Image, Flux, SDXL. "
+                            "Receives ImageModelLoraA–D."
+                        ),
+                    },
+                ),
+                "video_model": (
+                    "MODEL",
+                    {
+                        "tooltip": (
+                            "Singular video UNET: LTX 2.x (and similar). "
+                            "Receives VideoModelLoraA–D."
                         ),
                     },
                 ),
@@ -1050,7 +1182,8 @@ class LazySubjectSceneAutomation:
                         "multiline": False,
                         "tooltip": (
                             "From Lazy Global Selector. Used as [Workflow] in the selector "
-                            "blob when subject/scenario files do not set [Workflow]."
+                            "blob when subject/scenario files do not set [Workflow]. "
+                            "Does not switch model_high / model_low / minimax_model."
                         ),
                     },
                 ),
@@ -1115,6 +1248,9 @@ class LazySubjectSceneAutomation:
         "STRING",
         "STRING",
         "STRING",
+        "MODEL",
+        "MODEL",
+        "MODEL",
     )
     RETURN_NAMES = (
         "prompt",
@@ -1126,6 +1262,9 @@ class LazySubjectSceneAutomation:
         "subject_description",
         "prompt_override",
         "selector",
+        "minimax_model",
+        "image_model",
+        "video_model",
     )
     FUNCTION = "run"
     CATEGORY = "vsaan212/automation"
@@ -1182,13 +1321,12 @@ class LazySubjectSceneAutomation:
             str(kwargs.get("scenario_2_high_strength") or ""),
             str(kwargs.get("scenario_2_low_strength") or ""),
             str(kwargs.get("global_selector_input") or ""),
+            str(kwargs.get("video_length") or ""),
         ]
         return "|".join(fingerprint + stable)
 
     def run(
         self,
-        model_high,
-        clip_high,
         subject: str,
         scenario: str,
         scenario_2: str = "none",
@@ -1196,8 +1334,14 @@ class LazySubjectSceneAutomation:
         scenario_2_low_strength: float = 1.0,
         pass_subject_to_main_prompt: bool = True,
         randomize_subject_in_directory: bool = False,
+        video_length: float = 0.0,
+        model_high=None,
+        clip_high=None,
         model_low=None,
         clip_low=None,
+        minimax_model=None,
+        image_model=None,
+        video_model=None,
         post_text: Optional[str] = None,
         prepend_text: Optional[str] = None,
         global_selector_input: Optional[str] = None,
@@ -1250,22 +1394,55 @@ class LazySubjectSceneAutomation:
         ch, cl, cdesc, ckw, cprompt = parse_scenario_text(scen_raw)
         ch2, cl2, cdesc2, ckw2, cprompt2 = parse_scenario_text(scen2_raw)
 
+        img_s, vid_s = _singular_stacks_from_text(subj_raw)
+        img_c, vid_c = _singular_stacks_from_text(scen_raw)
+        img_c2, vid_c2 = _singular_stacks_from_text(scen2_raw)
+
         cdesc, cprompt, ckw = _expand_scenario_random_fields(cdesc, cprompt, ckw)
         cdesc2, cprompt2, ckw2 = _expand_scenario_random_fields(cdesc2, cprompt2, ckw2)
 
         hi = _merge_stacks(sh, ch, ch2)
         lo = _merge_stacks(sl, cl, cl2)
+        img_stack = _merge_stacks(img_s, img_c, img_c2)
+        vid_stack = _merge_stacks(vid_s, vid_c, vid_c2)
 
-        model_h, clip_h = _apply_stack(model_high, clip_high, hi)
+        clip_companion = clip_high if clip_high is not None else clip_low
+
+        model_h, clip_h = _apply_stack(
+            model_high, clip_high, hi, dest="model_high"
+        )
         if model_low is not None:
-            # MiniMax / single-CLIP graphs wire R2V (or low UNET) on model_low without
-            # a second CLIP. Still apply Low LoRA slots to the model; use clip_high as
-            # the LoraLoader companion and leave clip_low output empty when unwired.
             clip_for_low = clip_low if clip_low is not None else clip_high
-            model_l, clip_l_applied = _apply_stack(model_low, clip_for_low, lo)
+            model_l, clip_l_applied = _apply_stack(
+                model_low, clip_for_low, lo, dest="model_low"
+            )
             clip_l = clip_l_applied if clip_low is not None else None
         else:
             model_l, clip_l = None, None
+            if lo:
+                _apply_stack(None, None, lo, dest="model_low")
+
+        mm_out = minimax_model
+        vid_out = video_model
+        img_out = image_model
+        if minimax_model is not None:
+            mm_out, _ = _apply_stack(
+                minimax_model, clip_companion, vid_stack, dest="minimax_model"
+            )
+        if video_model is not None:
+            vid_out, _ = _apply_stack(
+                video_model, clip_companion, vid_stack, dest="video_model"
+            )
+        if minimax_model is None and video_model is None and vid_stack:
+            _apply_stack(None, clip_companion, vid_stack, dest="video_model")
+        if image_model is not None:
+            img_out, clip_h_from_img = _apply_stack(
+                image_model, clip_companion, img_stack, dest="image_model"
+            )
+            if clip_high is not None and clip_h_from_img is not None:
+                clip_h = clip_h_from_img
+        elif img_stack:
+            _apply_stack(None, clip_companion, img_stack, dest="image_model")
 
         subject_description = (sdesc or "").strip()
         subj_for_main = sdesc if pass_subject_to_main_prompt else ""
@@ -1280,12 +1457,30 @@ class LazySubjectSceneAutomation:
             prompt_override = _build_prompt(pre, post, "", prompt_override)
         keywords = _format_keywords(skw, ckw, ckw2)
 
+        has_token = _VIDEO_LENGTH_TOKEN in (prompt or "") or _VIDEO_LENGTH_TOKEN in (
+            prompt_override or ""
+        )
+        prompt = _inject_video_length(
+            prompt, video_length, append_if_missing=not has_token and not (prompt_override or "").strip()
+        )
+        prompt_override = _inject_video_length(
+            prompt_override,
+            video_length,
+            append_if_missing=not has_token and bool((prompt_override or "").strip()),
+        )
+        if float(video_length or 0) > 0:
+            debug(
+                "SAS",
+                f"injected {_VIDEO_LENGTH_TOKEN} {_format_video_length_value(video_length)}",
+            )
+
         fields = _merge_minimax_selector_fields(
             _minimax_fields_from_content(subj_raw),
             _minimax_fields_from_content(scen_raw),
             _minimax_fields_from_content(scen2_raw),
         )
         # File [Workflow] wins; else fall back to global selector mode.
+        # Global selector never switches model sockets — only this tag.
         if not (fields.get("Workflow") or "").strip():
             gw = _normalize_workflow_value(
                 (global_selector_input or "").strip().splitlines()[0]
@@ -1311,6 +1506,9 @@ class LazySubjectSceneAutomation:
             subject_description,
             prompt_override,
             selector,
+            mm_out,
+            img_out,
+            vid_out,
         )
 
 

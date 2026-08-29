@@ -4,7 +4,16 @@
 
 For an end-to-end workflow narrative (how the node, Python module, HTTP routes, and `lazy_subject_scene_live.js` fit together), see **[lazy-subject-scene-automation-workflow.md](../workflows/lazy-subject-scene-automation-workflow.md)**.
 
-Combines optional-switch LoRA behavior, subject/scenario file selection, and formatted prompt output for **dual high/low** Wan-style workflows **or single-model** graphs (**Z-Image**, **Krea2**, Flux, SDXL, etc.) when only **`model_high`** / **`clip_high`** are wired.
+Combines optional-switch LoRA behavior, subject/scenario file selection, and formatted prompt output for **Wan dual high/low** stacks **or** singular-model graphs.
+
+- **Wan:** wire **`model_high`** / **`clip_high`** (and **`model_low`** / **`clip_low`**). File tags **`LoraHighA–C`** / **`LoraLowA–C`** (legacy aliases still work).
+- **MiniMax H3:** wire Lazy Model Switcher into **`minimax_model`**. File tags **`VideoModelLoraA–D`**. CLIP can stay on **`clip_high`** as the LoRA companion.
+- **Krea2 / Z-Image / Flux:** wire **`image_model`**. File tags **`ImageModelLoraA–D`**.
+- **LTX 2.x:** wire **`video_model`**. Same **`VideoModelLoraA–D`** tags as MiniMax.
+
+**`global_selector_input`** only fills **`[Workflow]`** when files omit it. It does **not** switch High / Low / Minimax sockets.
+
+**`video_length`** (seconds) replaces **`[video_length]`** in **`prompt`** / **`prompt_override`**, or appends a **`[video_length]`** block. **`[Time]`** is left alone (time of day). Prompt Engineer keeps that block in the LLM user message and uses it for clip duration / beat pacing.
 
 **Recent (v1.9.3):** **`model_low`** / **`clip_low`** optional (single-model workflows); **`{a|b|c}`** random picks use `secrets` and **`IS_CHANGED`** cache busting so choices vary every queue; live pane sync on queue via **`beforeQueuePrompt`**; non-empty live buffers preferred over disk on run.
 
@@ -25,7 +34,7 @@ When the node refreshes its subject/scenario lists (on node creation, **`R`**, o
 
 ## Workflow overview
 
-1. Load your checkpoint into **`model_high`** / **`clip_high`** (required). For **Wan-style dual stacks**, also wire **`model_low`** / **`clip_low`**. For **single-model** workflows (**Z-Image**, **Krea2**, one Flux/SDXL branch), leave the low branch unwired and use the high outputs downstream — put LoRAs on **High** slots or set **Low** slots to `bypass`.
+1. **Wan:** load high-noise into **`model_high`** / **`clip_high`**. For dual stacks also wire **`model_low`** / **`clip_low`**. **MiniMax:** TxtImg UNET + reference UNET → Lazy Model Switcher → **`minimax_model`** (leave High/Low unwired). **Image:** wire **`image_model`**. **LTX:** wire **`video_model`**.
 2. Pick **`subject`**, **`scenario`**, and optionally **`scenario_2`** from the dropdowns (`.txt` paths without extension). Set **`scenario_2`** to `none` when you only need one scenario file.
 4. Optional: connect **`prepend_text`** / **`post_text`** (STRING sockets only) for framing around the subject description.
 5. Edit **subject / scenario / scenario 2** in the live panes on the node. **Queue uses the pane text**, not necessarily what is on disk. Use **Save edits** to write non-empty panes back to the selected `.txt` files.
@@ -40,10 +49,13 @@ Dropdown lists refresh when the node is created; use ComfyUI **`R`** after addin
 
 | Input | Type | Notes |
 |-------|------|--------|
-| `model_high` | MODEL | **Required.** Primary model branch; receives merged LoRA stacks for the **high** slots. |
-| `clip_high` | CLIP | **Required.** Patched alongside `model_high`. |
-| `model_low` | MODEL | **Optional.** Second model branch (Wan low-noise, or MiniMax R2V UNET). Passes through even if `clip_low` is unwired; Low LoRA slots still apply to this model. |
-| `clip_low` | CLIP | **Optional.** Pair with `model_low` for dual CLIP stacks; omit for single-CLIP graphs (MiniMax). |
+| `model_high` | MODEL | **Optional.** Wan high-noise branch. Receives `LoraHighA–C`. Not MiniMax / Krea2 / LTX. |
+| `clip_high` | CLIP | **Optional.** Wan high CLIP, and LoRA companion for MiniMax / image / video when those have no CLIP. |
+| `model_low` | MODEL | **Optional.** Wan low-noise branch only (`LoraLowA–C`). MiniMax R2V belongs on `minimax_model`. |
+| `clip_low` | CLIP | **Optional.** Pair with `model_low` for dual CLIP stacks. |
+| `minimax_model` | MODEL | **Optional.** Singular MiniMax H3 UNET. Wire Lazy Model Switcher here. Receives `VideoModelLoraA–D`. |
+| `image_model` | MODEL | **Optional.** Singular image model (Krea2, Z-Image, Flux, SDXL). Receives `ImageModelLoraA–D`. |
+| `video_model` | MODEL | **Optional.** Singular video UNET (LTX 2.x). Receives `VideoModelLoraA–D`. |
 | `subject` | dropdown | `.txt` under `lazy_subject_scene_automation/SubjectFiles/` (recursive). |
 | `scenario` | dropdown | First scenario `.txt` under `lazy_subject_scene_automation/ScenarioFiles/` (recursive). |
 | `scenario_2` | dropdown | Second scenario `.txt` (same folder and format). Default `none`. Adds up to three more LoRA slots (A/B/C) after scenario 1. |
@@ -51,9 +63,10 @@ Dropdown lists refresh when the node is created; use ComfyUI **`R`** after addin
 | `scenario_2_low_strength` | FLOAT | Overrides `[LoraLowA]` **model** strength in scenario 2 live text. Clip strengths in the file are unchanged. |
 | `pass_subject_to_main_prompt` | BOOLEAN | As before. |
 | `randomize_subject_in_directory` | BOOLEAN | **OFF** (default): use the selected `subject` dropdown. **ON**: each queue randomly picks another `.txt` from the **same folder** as the selected subject (e.g. select `cast/alice` → random pick among all files in `SubjectFiles/cast/`). Reads from disk; ignores the live subject pane. |
+| `video_length` | FLOAT | Clip duration in seconds (0–300, default **0** = skip). Replaces `[video_length]` in `prompt` / `prompt_override`, or appends a `[video_length]` block. Does not change `[Time]` (time of day). MiniMax template sets this to 8. Prompt Engineer keeps the block in the LLM user message. |
 | `prepend_text` | STRING (optional, **socket only**) | Wired text prepended to the built prompt; empty if unconnected. |
 | `post_text` | STRING (optional, **socket only**) | Wired text after the subject block; empty if unconnected. |
-| `global_selector_input` | STRING (optional, **socket only**) | From [Lazy Global Selector](lazy-global-selector.md). Used as `[Workflow]` in the selector blob when subject/scenario files do not set `[Workflow]`. |
+| `global_selector_input` | STRING (optional, **socket only**) | From [Lazy Global Selector](lazy-global-selector.md). Used as `[Workflow]` in the selector blob when subject/scenario files do not set `[Workflow]`. Does **not** switch model sockets. |
 
 ## Outputs
 
@@ -66,6 +79,9 @@ Dropdown lists refresh when the node is created; use ComfyUI **`R`** after addin
 | `subject_description` | Raw subject-side description only (no prepend/post). |
 | `prompt_override` | **Prompt override output** — text from scenario `[Prompt]` blocks (scenario 1 and/or 2). Empty when files use `[desciption]` instead. Wire to LazyPrompt **prompt_override_input**. Not included in the main `prompt` output. |
 | `selector` | MiniMax / media routing blob for [Lazy MiniMax All-in-One](lazy-minimax-all-in-one.md). Built from `[Workflow]`, `[ReferenceImage1]`–`[ReferenceImage5]`, `[AudioReference]` in subject + scenario files (see below). Empty when those tags are absent (unless `global_selector_input` supplies a mode). |
+| `minimax_model` | After `VideoModelLoraA–D` (passthrough if unwired). |
+| `image_model` | After `ImageModelLoraA–D`. |
+| `video_model` | After `VideoModelLoraA–D`. |
 
 ## LoRA application order
 
@@ -120,6 +136,8 @@ If there is only **one** path section before the description, that single LoRA i
 | `LoraHighA` / `LoraLowA` | Primary subject LoRAs (slot A). |
 | `LoraHighB` / `LoraLowB` | Optional pair (slot B). |
 | `LoraHighC` / `LoraLowC` | Optional pair (slot C). |
+| `ImageModelLoraA` … `ImageModelLoraD` | Applied to **`image_model`** only. Bypass / omitted = skip. |
+| `VideoModelLoraA` … `VideoModelLoraD` | Applied to **`minimax_model`** and/or **`video_model`**. Not applied to Wan High/Low. |
 | `KeywordA` / `KeywordB` / `KeywordC` | Merged into `keywords` output. |
 | `Workflow` | Optional. MiniMax mode hint: `T2V` / `T2VA` / `I2V` / `I2VA` / `FL2V` / `R2V` (aliases normalized). Emitted on **`selector`**. Place **before** description / Prompt. |
 | `ReferenceImage1` … `ReferenceImage5` | Optional paths under ComfyUI `input/` (e.g. `folder/image.png`). Emitted on **`selector`**. |
@@ -179,6 +197,8 @@ If only **one** path section exists before the description, that LoRA is applied
 | `LoraHighA` / `LoraLowA` | Main scenario LoRAs (slot A). |
 | `LoraHighB` / `LoraLowB` | Optional pair (slot B). |
 | `LoraHighC` / `LoraLowC` | Optional pair (slot C). |
+| `ImageModelLoraA` … `ImageModelLoraD` | Applied to **`image_model`**. |
+| `VideoModelLoraA` … `VideoModelLoraD` | Applied to **`minimax_model`** and/or **`video_model`**. |
 | `KeywordA` / `KeywordB` / `KeywordC` | Appended after subject keywords in `keywords`. |
 | `Workflow` / `ReferenceImage1`–`5` / `AudioReference` | Same MiniMax selector tags as subject files. Merged into **`selector`** (scenario non-empty values override subject; scenario 2 overrides scenario 1). |
 | `description` or `desciption` | Scenario text; appears after the subject block in `prompt`. |
@@ -252,6 +272,19 @@ A blond girl jumps on a trampoline
 ```
 
 Wire **`selector`** → [Lazy MiniMax All-in-One](lazy-minimax-all-in-one.md) **`selector`**.
+
+MiniMax / LTX LoRAs (applied to **`minimax_model`** / **`video_model`**, not Wan High/Low):
+
+```text
+[VideoModelLoraA][1.0]
+rtx\upscale.safetensors
+[VideoModelLoraB]
+bypass
+[desciption]
+A blond girl jumps on a trampoline at [Time]
+```
+
+Put **`[video_length]`** in **`[Prompt]`** (or the main prompt) where the clip duration should appear. SAS replaces that token from the **`video_length`** widget. **`[Time]`** stays as time of day.
 
 ---
 

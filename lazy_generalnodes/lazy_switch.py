@@ -4,6 +4,9 @@ from __future__ import annotations
 import re
 
 
+from ..lazy_logging import debug
+
+
 def _matches(compare: str, match: str, case_sensitive: bool) -> bool:
     """True when compare equals match, or equals any alternative in a list.
 
@@ -36,7 +39,13 @@ class _LazySwitchBase:
         return ["on_false"]
 
     def switch(self, compare, match, on_true, on_false, case_sensitive=False):
-        if _matches(compare, match, case_sensitive):
+        matched = _matches(compare, match, case_sensitive)
+        branch = "on_true" if matched else "on_false"
+        debug(
+            self.__class__.__name__,
+            f'compare "{(compare or "").strip()}" match "{(match or "").strip()}" → {branch}',
+        )
+        if matched:
             return (on_true,)
         return (on_false,)
 

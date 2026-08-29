@@ -2,7 +2,7 @@
   "id": "video_minimax_h3_global_selector",
   "revision": 0,
   "last_node_id": 25,
-  "last_link_id": 44,
+  "last_link_id": 45,
   "nodes": [
     {
       "id": 1,
@@ -41,7 +41,6 @@
           "name": "MODEL",
           "type": "MODEL",
           "links": [
-            10,
             31
           ]
         }
@@ -1244,16 +1243,6 @@
       ],
       "inputs": [
         {
-          "name": "model_high",
-          "type": "MODEL",
-          "link": 10
-        },
-        {
-          "name": "clip_high",
-          "type": "CLIP",
-          "link": 11
-        },
-        {
           "name": "subject",
           "type": "COMBO",
           "widget": {
@@ -1310,6 +1299,24 @@
           "link": null
         },
         {
+          "name": "video_length",
+          "type": "FLOAT",
+          "widget": {
+            "name": "video_length"
+          },
+          "link": null
+        },
+        {
+          "name": "model_high",
+          "type": "MODEL",
+          "link": null
+        },
+        {
+          "name": "clip_high",
+          "type": "CLIP",
+          "link": 11
+        },
+        {
           "name": "model_low",
           "type": "MODEL",
           "link": null
@@ -1317,6 +1324,21 @@
         {
           "name": "clip_low",
           "type": "CLIP",
+          "link": null
+        },
+        {
+          "name": "minimax_model",
+          "type": "MODEL",
+          "link": 45
+        },
+        {
+          "name": "image_model",
+          "type": "MODEL",
+          "link": null
+        },
+        {
+          "name": "video_model",
+          "type": "MODEL",
           "link": null
         },
         {
@@ -1386,6 +1408,24 @@
           "links": [
             14
           ]
+        },
+        {
+          "name": "minimax_model",
+          "type": "MODEL",
+          "links": [
+            33,
+            34
+          ]
+        },
+        {
+          "name": "image_model",
+          "type": "MODEL",
+          "links": []
+        },
+        {
+          "name": "video_model",
+          "type": "MODEL",
+          "links": []
         }
       ],
       "widgets_values": [
@@ -1395,7 +1435,8 @@
         1.0,
         1.0,
         true,
-        false
+        false,
+        8.0
       ],
       "order": 14
     },
@@ -1882,8 +1923,7 @@
           "name": "MODEL",
           "type": "MODEL",
           "links": [
-            33,
-            34
+            45
           ]
         }
       ],
@@ -2283,7 +2323,7 @@
       6,
       0,
       14,
-      13,
+      17,
       "STRING"
     ],
     [
@@ -2295,19 +2335,11 @@
       "STRING"
     ],
     [
-      10,
-      1,
-      0,
-      14,
-      0,
-      "MODEL"
-    ],
-    [
       11,
       3,
       0,
       14,
-      1,
+      9,
       "CLIP"
     ],
     [
@@ -2480,16 +2512,16 @@
     ],
     [
       33,
-      17,
-      0,
+      14,
+      9,
       20,
       0,
       "MODEL"
     ],
     [
       34,
-      17,
-      0,
+      14,
+      9,
       21,
       0,
       "MODEL"
@@ -2573,6 +2605,14 @@
       24,
       1,
       "VAE"
+    ],
+    [
+      45,
+      17,
+      0,
+      14,
+      12,
+      "MODEL"
     ]
   ],
   "groups": [],
@@ -2588,7 +2628,7 @@
     "info": {
       "name": "MiniMax H3 — Global Selector",
       "author": "Vsaan212",
-      "description": "One Lazy Global Selector drives Image Loaders, Prompt Engineer, MiniMax, and Model Switcher.",
+      "description": "One Lazy Global Selector drives Image Loaders, Prompt Engineer, MiniMax, and Model Switcher. Switcher output goes through SAS minimax_model for VideoModel LoRAs.",
       "version": "1.0.0"
     }
   },

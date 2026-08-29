@@ -47,6 +47,8 @@ Keep start and end stills consistent (same person, outfit, lighting family).
 
 ## T2V — text only
 
+Set **`target_model`** to **MiniMax H3 TR2V**. No images required.
+
 **User idea:**
 
 ```text

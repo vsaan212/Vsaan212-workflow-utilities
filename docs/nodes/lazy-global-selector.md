@@ -21,8 +21,8 @@ One dropdown for MiniMax H3 workflow mode. Fan the STRING out to Image Loaders, 
 ## Wiring
 
 1. Wire to every **Lazy Image Loader** `global_selector_input` (hard-gates IMAGE by role).
-2. Wire to **Lazy-subject-and-scene-automation** `global_selector_input` (fills `[Workflow]` when files omit it).
+2. Wire to **Lazy-subject-and-scene-automation** `global_selector_input` (fills `[Workflow]` when files omit it). Does **not** switch SAS `model_high` / `model_low` / `minimax_model`.
 3. Wire to **LazyPrompt — Prompt Engineer** `global_selector_input` (gates vision/media sockets).
-4. Prefer Prompt Engineer `selector_Out` (or SAS `selector`) → MiniMax `selector` and **Lazy Model Switcher** `selector_in`.
+4. Prefer Prompt Engineer `selector_Out` (or SAS `selector`) → MiniMax `selector` and **Lazy Model Switcher** `selector_in`. Switcher output → SAS `minimax_model`.
 
 See [video_minimax_h3_global_selector](../workflows/video_minimax_h3_global_selector.md).

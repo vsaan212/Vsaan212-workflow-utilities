@@ -16,7 +16,7 @@ Load an image from ComfyUI’s `input/` folder with optional **cover crop** to p
 
 | Widget | Default | Notes |
 |--------|---------|--------|
-| `image` | — | Combo + ComfyUI upload; lists images under `input/` (including subfolders) |
+| `image` | — | Combo of files under `input/` (including subfolders). New nodes start **empty** (no file selected, no decode) so the loader does not hold VRAM until you pick or drop an image. Upload with **Browse…** or drop onto the crop preview (not Comfy’s native Load Image thumbnail). |
 | `workflow_role` | **Image2video First frame** | Role for global-selector gating: first frame / last frame / reference image |
 | `aspect_ratio` | **9:16 (Phone)** | 9:16, 16:9, 1:1, 4:5, 3:4, 4:3, 2:3, 21:9, or **Original (no crop)** |
 | `auto_crop` | ON | Cover-crop to the selected ratio; OFF passes the full image through |
@@ -34,15 +34,16 @@ Load an image from ComfyUI’s `input/` folder with optional **cover crop** to p
 
 ## UI (browser extension)
 
-The node includes a custom preview (`js/lazy_image_loader.js`):
+The node includes a custom crop preview (`js/lazy_image_loader.js`). Comfy’s native Load Image thumbnail under the node is disabled so only this preview is shown:
 
 - **Browse…** — file picker (uploads to `input/`)
 - **Open input folder** — opens ComfyUI’s input directory
 - **Flip horizontal** — toggle mirror; button highlights when active; preview matches output
 - **Zoom** slider — 1×–4×; use with pan to cut empty sky/letterboxing
 - **Pan readout** — live `Pan X · Y · Zoom` values (and **Flipped** when on; hidden Comfy sliders stay out of the way)
-- **Drop** an image on the preview area to upload
+- **Drop** an image on the preview area to upload (isolated to this node — dropping on a stacked loader no longer updates the neighbor’s preview)
 - **Drag** inside the preview to pan (more range when zoom &gt; 1×)
+- Preview frame is locked to the selected aspect (no CSS stretch)
 
 ## Wiring tips
 
@@ -74,4 +75,6 @@ All listed aspect ratios use the same formula; **Original** uses the image’s o
 
 - **Node fails on load (`KeyError: 'input'`)** — fixed in v1.9.0+; uses `get_input_directory()` like ComfyUI’s built-in Load Image.
 - **Preview empty after upload** — press **`R`** to refresh, or pick the file from the `image` combo.
+- **Stale thumbnail under the crop preview** — that was Comfy’s native image widget; it is hidden. Restart ComfyUI (or refresh the frontend) after updating so only the adjustable crop preview remains.
+- **Preview looks stretched** — display-only; output crop is unchanged. Reload the frontend if an old node size is still cached.
 - **Drag-and-drop upload fails in some browsers** — use **Browse…** or copy files into `input/` and refresh.

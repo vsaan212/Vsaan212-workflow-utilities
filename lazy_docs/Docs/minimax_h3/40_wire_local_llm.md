@@ -27,7 +27,7 @@ On **LazyPrompt — Prompt Engineer**:
 |---------|--------|
 | **model** | `LM Studio (API)` |
 | **lm_studio_model** | Exact id from LM Studio |
-| **target_model** | Match your mode, e.g. `MiniMax H3 I2V` / `FL2V` / `R2V` |
+| **target_model** | Match your mode, e.g. `MiniMax H3 TR2V` / `I2V` / `FL2V` / `R2V` |
 | **bypass** | OFF (ON = skip the LLM and pass text through) |
 | **creativity** | Start around **0.5–0.7** (max **1.0**) |
 | **max_output_tokens** | Start **900**; raise for longer cinematic prompts |

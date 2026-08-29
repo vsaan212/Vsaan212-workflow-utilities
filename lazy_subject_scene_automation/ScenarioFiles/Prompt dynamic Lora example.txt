@@ -6,8 +6,14 @@ bypass
 A short scene beat for the LLM path.
 
 Closed Prompt-side LoRA tags (loaded by LazyPrompt after enhance, then stripped from PROMPT):
-[LoraH]relative\path\to\high_lora.safetensors[/LoraH]
-[LoraL]relative\path\to\low_lora.safetensors[/LoraL]
 
-Use real LoRA filenames under your ComfyUI models/loras folder. Empty or bypass paths are ignored.
-Replace the placeholder paths above before queueing.
+Wan dual-stack (wire PE model_high / model_low):
+[LoraH]relative\path\to\high_lora.safetensors[/LoraH]
+[LoraL[0.8]]relative\path\to\low_lora.safetensors[/LoraL]
+
+Singular models MiniMax / LTX / Flux / SDXL (wire PE lora_model, up to five):
+[Lora1[0.5]]relative\path\to\style_lora.safetensors[/Lora1]
+[Lora2]relative\path\to\character_lora.safetensors[/Lora2]
+
+Strength: [Lora1[0.5]] = model 0.5, clip 1.0. [Lora1[0.5][0.8]] = model 0.5, clip 0.8.
+Empty or bypass paths are ignored. Use real filenames under ComfyUI models/loras.

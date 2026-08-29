@@ -2,7 +2,8 @@
 
 Wraps Comfy core MiniMaxH3ImageToVideo (T2V / I2V / FL2V) and
 MiniMaxH3ReferenceToVideo (R2V). Optional selector STRING from
-Lazy-subject-and-scene-automation overrides wired media paths.
+Lazy-subject-and-scene-automation overlays matching Autogrow slots
+(ReferenceImage1 → ref_image_1, AudioReference → ref_audio_1).
 
 Uses ComfyUI V3 Autogrow inputs (same pattern as core MiniMax H3 nodes)
 so reference sockets expand one-at-a-time instead of listing all slots.
@@ -22,6 +23,7 @@ import torch
 from PIL import Image, ImageOps
 from comfy_api.latest import io
 
+from ..lazy_logging import debug
 from ..workflow_modes import (
     normalize_workflow,
     parse_selector_tagged,
@@ -177,6 +179,36 @@ def _as_autogrow_dict(value: Any) -> Dict[str, Any]:
     return {}
 
 
+def _overlay_autogrow(
+    d: Dict[str, Any], prefix: str, index_1based: int, value: Any
+) -> None:
+    """Write a SAS disk tensor onto Autogrow slot N (UI is 1-based: ref_image_1).
+
+    If the wired dict only has 0-based keys (older builds), overlay that instead
+    so the first socket is replaced rather than adding a sibling key.
+    """
+    k1 = f"{prefix}{index_1based}"
+    k0 = f"{prefix}{index_1based - 1}"
+    if k1 in d:
+        d[k1] = value
+    elif k0 in d:
+        d[k0] = value
+    else:
+        d[k1] = value
+
+
+def _sorted_autogrow(d: Dict[str, Any]) -> Dict[str, Any]:
+    """Stable Picture/Audio order: numeric suffix, then original key."""
+
+    def _idx(key: str) -> Tuple[int, str]:
+        try:
+            return int(str(key).rsplit("_", 1)[-1]), str(key)
+        except Exception:
+            return 0, str(key)
+
+    return {k: d[k] for k in sorted(d, key=_idx)}
+
+
 class LazyMinimaxAllInOne(io.ComfyNode):
     """Auto-switching MiniMax H3 conditioner (T2V / I2V / FL2V / R2V)."""
 
@@ -249,8 +281,10 @@ class LazyMinimaxAllInOne(io.ComfyNode):
                     default="",
                     tooltip=(
                         "Bare mode (T2V/I2V/FL2V/R2V) or tagged blob from "
-                        "Lazy-subject-and-scene-automation. Non-empty path fields override "
-                        "sockets; forces ref_image_size=match when tagged paths present."
+                        "Lazy-subject-and-scene-automation. Disk paths overlay matching "
+                        "Autogrow slots only (ReferenceImage1 → ref_image_1, "
+                        "AudioReference → ref_audio_1); other wired refs stay. "
+                        "Forces ref_image_size=match when tagged paths present."
                     ),
                 ),
                 io.Autogrow.Input(
@@ -373,12 +407,19 @@ class LazyMinimaxAllInOne(io.ComfyNode):
         ref_video_audios_d = _as_autogrow_dict(ref_video_audios)
         ref_audios_d = _as_autogrow_dict(ref_audios)
 
+        # Overlay SAS disk paths onto matching Autogrow slots only (1-based).
+        # Empty SAS slots must not wipe wired ref_image_2.. / extra audio.
         for i, tensor in enumerate(sel_images):
             if tensor is not None:
-                ref_images_d[f"ref_image_{i}"] = tensor
+                _overlay_autogrow(ref_images_d, "ref_image_", i + 1, tensor)
 
         if sel_audio is not None:
-            ref_audios_d["ref_audio_0"] = sel_audio
+            _overlay_autogrow(ref_audios_d, "ref_audio_", 1, sel_audio)
+
+        ref_images_d = _sorted_autogrow(ref_images_d)
+        ref_videos_d = _sorted_autogrow(ref_videos_d)
+        ref_video_audios_d = _sorted_autogrow(ref_video_audios_d)
+        ref_audios_d = _sorted_autogrow(ref_audios_d)
 
         # Dual-use: ReferenceImage1/2 also feed first/last for I2V/FL2V
         if sel_images[0] is not None:
@@ -398,6 +439,12 @@ class LazyMinimaxAllInOne(io.ComfyNode):
             mode = "I2V"
         else:
             mode = "T2V"
+
+        debug(
+            "Lazy MiniMax All-in-One",
+            f"mode {mode} duration {duration_seconds}s → {length} frames "
+            f"({int(width)}x{int(height)})",
+        )
 
         # Hard-gate sockets by resolved mode
         if mode == "T2V":

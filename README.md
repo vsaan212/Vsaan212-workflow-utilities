@@ -8,9 +8,9 @@ ComfyUI custom nodes: selectors, dual-stack subject/scene automation, text utili
 |------|----------------|------------|
 | **Subject Selector** | Load `.txt` from `subjectselector/SubjectFiles/` (recursive). | [docs/nodes/subject-selector.md](docs/nodes/subject-selector.md) |
 | **Scenario Selector** | Load `.txt` from `scenarioselector/ScenarioFiles/` (recursive). | [docs/nodes/scenario-selector.md](docs/nodes/scenario-selector.md) |
-| **Lazy-subject-and-scene-automation** | One node: **one subject** + **two scenario** files (up to 6 scenario LoRA sets), **`model_high`** / **`clip_high`** required (single-model **Z-Image**, **Krea2**, Flux, etc.) or full Wan-style **high/low** dual stack when **`model_low`** / **`clip_low`** are wired. **`prompt`**, **`keywords`**, **`subject_description`**, **`prompt_override`**, **`selector`** (MiniMax workflow / reference paths). Optional **`global_selector_input`**. **Live editors** on the node (queue uses pane text, not disk); **Save edits** to `.txt`; **scenario 2 strength** sliders override `[LoraHighA]` / `[LoraLowA]` model strength. Uses **`lazy_subject_scene_automation/SubjectFiles`** and **`…/ScenarioFiles`**. | [docs/nodes/lazy-subject-scene-automation.md](docs/nodes/lazy-subject-scene-automation.md) |
-| **Lazy Global Selector** | One dropdown (`T2V` / `I2V` / `FL2V` / `R2V`) that fans out to Image Loaders, SAS, Prompt Engineer, MiniMax, and Model Switcher. | [docs/nodes/lazy-global-selector.md](docs/nodes/lazy-global-selector.md) |
-| **Lazy Model Switcher** | Pick fl2va vs ref2va UNET from the mode string for a single sampler path. | [docs/nodes/lazy-model-switcher.md](docs/nodes/lazy-model-switcher.md) |
+| **Lazy-subject-and-scene-automation** | One subject + two scenario files. **Wan** `model_high`/`model_low` (`LoraHigh*`/`LoraLow*`); **MiniMax** `minimax_model` (`VideoModelLoraA–D`); **image** `image_model` (`ImageModelLoraA–D`); **LTX** `video_model`. **`video_length`** injects `[video_length]` (not `[Time]`). Live editors + scenario 2 strength sliders. | [docs/nodes/lazy-subject-scene-automation.md](docs/nodes/lazy-subject-scene-automation.md) |
+| **Lazy Global Selector** | One dropdown (`T2V` / `I2V` / `FL2V` / `R2V`) that fans out to Image Loaders, SAS `[Workflow]`, Prompt Engineer, MiniMax, and Model Switcher. Does not switch SAS model sockets. | [docs/nodes/lazy-global-selector.md](docs/nodes/lazy-global-selector.md) |
+| **Lazy Model Switcher** | Pick fl2va vs ref2va UNET from the mode string. Wire output to SAS **`minimax_model`**. | [docs/nodes/lazy-model-switcher.md](docs/nodes/lazy-model-switcher.md) |
 | **Lazy Switch (Float / Integer / Text)** | Compare an upstream string to **`match`**; output **`on_true`** or **`on_false`** (typed). Unused branch is lazy-skipped. | [docs/nodes/lazy-switch.md](docs/nodes/lazy-switch.md) |
 | **Lazy Docs** | Split-pane Markdown docs from `lazy_docs/Docs/` (optional subfolder). Index from frontmatter; click to load HTML/Raw. | [docs/nodes/lazy-docs.md](docs/nodes/lazy-docs.md) |
 | **Text Split** | Split by separator, regex, or **tagged format** (`[Tag]` headers). **Auto-detects** v2 subject/scenario files when the first line is `[LoraHighA]`; otherwise **`tagged_format`** or separator `#` for legacy graphs. | [docs/nodes/text-split.md](docs/nodes/text-split.md) |
@@ -19,7 +19,7 @@ ComfyUI custom nodes: selectors, dual-stack subject/scene automation, text utili
 | **Lazy Image Loader** | Load from `input/`: browse, drag-and-drop upload, open input folder, **cover crop** to popular ratios (default **9:16**), optional **megapixel resize** (0.2–4.0 MP, multiple of 32), live drag-to-position preview. Optional **`workflow_role`** + **`global_selector_input`** hard-gates `IMAGE`. | [docs/nodes/lazy-image-loader.md](docs/nodes/lazy-image-loader.md) |
 | **Lazy Multi Frame Select** | IMAGE batch from **VAE Decode** → grid of all frames, **pauses** until you pick up to **6** and click **Continue**. Six IMAGE outputs (`image_1`–`image_6`). | [docs/nodes/lazy-multi-frame-select.md](docs/nodes/lazy-multi-frame-select.md) |
 | **Lazy MiniMax All-in-One** | MiniMax H3 conditioner: auto T2V / I2V / FL2V / R2V from bare mode or automation **`selector`**. Seconds → H3 frame length. Requires ComfyUI 0.30+ native H3. | [docs/nodes/lazy-minimax-all-in-one.md](docs/nodes/lazy-minimax-all-in-one.md) |
-| **LazyPrompt** | Prompt Engineer (LTX / Wan / Flux / SDXL / Pony / SD 1.5 / MiniMax H3), Vision Describe (Qwen2.5-VL), Unload local model. LM Studio API uses native `/api/v1/chat` with OpenAI fallback. Mode-gated first/last/refs + `selector_Out`. Prompt **`[LoraH]`** / **`[LoraL]`** dynamic LoRA loads. | [docs/nodes/lazyprompt.md](docs/nodes/lazyprompt.md) |
+| **LazyPrompt** | Prompt Engineer (LTX / Wan / Flux / SDXL / Pony / SD 1.5 / MiniMax H3), Vision Describe (Qwen2.5-VL), Unload local model. LM Studio API uses native `/api/v1/chat` with OpenAI fallback. Mode-gated first/last/refs + `selector_Out`. Prompt **`[LoraH]`** / **`[LoraL]`** (Wan) and **`[Lora1]`**–**`[Lora5]`** (singular) dynamic LoRA loads. | [docs/nodes/lazyprompt.md](docs/nodes/lazyprompt.md) |
 
 **Documentation index:** [docs/README.md](docs/README.md) · MiniMax template: [docs/workflows/video_minimax_h3_global_selector.md](docs/workflows/video_minimax_h3_global_selector.md)
 
@@ -82,13 +82,14 @@ Full node reference: [lazy-subject-scene-automation-workflow.md](docs/workflows/
 ### How to wire it
 
 **1. Lazy-subject-and-scene-automation (center)**  
-- Connect **`model_high`** and **`clip_high`** (required). For **single-model** graphs (**Z-Image**, **Krea2**, one Flux/SDXL branch, etc.), leave **`model_low`** / **`clip_low`** unwired and use **`model_high`** / **`clip_high`** outputs downstream. For **Wan-style dual stacks**, also wire **`model_low`** / **`clip_low`** in and out.  
+- **Wan:** wire **`model_high`** / **`clip_high`** (and **`model_low`** / **`clip_low`** for dual stacks). **MiniMax:** TxtImg + reference UNETs → Lazy Model Switcher → **`minimax_model`** (CLIP can stay on **`clip_high`** as LoRA companion). **Krea2 / Z-Image:** **`image_model`**. **LTX:** **`video_model`**.  
 - Pick **`subject`**, **`scenario`**, and optional **`scenario_2`** from the dropdowns (`.txt` under `lazy_subject_scene_automation/SubjectFiles` and `…/ScenarioFiles`).  
+- Set **`video_length`** (seconds). The node replaces **`[video_length]`** in prompt text, or appends a `[video_length]` block. **`[Time]`** is time of day and is not changed.  
 - Edit the **live** panes on the node; queue uses that text (not necessarily disk). Use **Save edits** to write back to `.txt`.  
 - Optional **`prepend_text`** / **`post_text`**: wire STRING inputs (e.g. **Lazy Prompt Saver** for a saved prefix, **User Text** or any string node for postfix).  
-- Outputs **`model_high`** / **`clip_high`** (and optional **`model_low`** / **`clip_low`**), **`keywords`**, **`prompt`**, **`subject_description`**, and **`prompt_override`** go to the rest of your graph.  
+- Outputs **`model_high`** / **`clip_high`** (and optional **`model_low`** / **`clip_low`**), **`minimax_model`**, **`image_model`**, **`video_model`**, **`keywords`**, **`prompt`**, **`subject_description`**, and **`prompt_override`** go to the rest of your graph.  
 - Output **`prompt_override`**: wire when a scenario file uses a **`[Prompt]`** block (see below).  
-- **Single-model LoRA tip:** put LoRAs on **High** slots (`LoraHighA`, …) or set **Low** slots to `bypass` — the low branch is skipped when **`model_low`** / **`clip_low`** are not connected.
+- **LoRA tip:** Wan files keep `LoraHigh*` / `LoraLow*`. MiniMax / LTX files use `VideoModelLoraA–D`. Image files use `ImageModelLoraA–D`. High slots are **not** auto-applied to MiniMax.
 
 **2. LazyPrompt — Prompt Engineer (LLM)**  
 - **`user_input`**: your rough idea (or leave minimal when override carries the scene).  
@@ -96,7 +97,7 @@ Full node reference: [lazy-subject-scene-automation-workflow.md](docs/workflows/
 - **`character`** ← **`subject_description`** from the automation node so the subject file’s **`[desciption]`** always reaches the LLM (including when **`prompt_override_input`** is set).  
 - **`scene_context`** ← **LazyPrompt — Vision Describe** (or paste text manually).  
 - **`image`**: optional reference frame for **LM Studio (API)** with a vision model loaded.  
-- Optional: wire automation **`model_high`** / **`clip_high`** (and low) into Prompt Engineer when the Prompt / LLM emits **`[LoraH]…[/LoraH]`** / **`[LoraL]…[/LoraL]`** — those load after the LLM and are stripped from **`PROMPT`**.  
+- Optional: wire automation **`model_high`** / **`clip_high`** (and low) into Prompt Engineer for **`[LoraH]`** / **`[LoraL]`**. Wire **`minimax_model`** / **`video_model`** / **`image_model`** into Prompt Engineer **`lora_model`** for **`[Lora1]`**–**`[Lora5]`** (optional strength `[Lora1[0.5]]path[/Lora1]`). Those load after the LLM and are stripped from **`PROMPT`**.  
 - Set **`target_model`**, **`model`** (e.g. **LM Studio (API)**), **`lm_studio_model`**, and token/temperature as needed.  
 - Use output **`PROMPT`** (and model/clip outs when wired) downstream.
 
@@ -107,7 +108,7 @@ Full node reference: [lazy-subject-scene-automation-workflow.md](docs/workflows/
 
 **4. Scenario file tips for this graph**  
 - **`[desciption]`** → merged into automation **`prompt`** (CLIP-side text).  
-- **`[Prompt]`** → sent on **`prompt_override`** only (LLM path); mutually exclusive with **`[desciption]`** in the same file. Optional closed **`[LoraH]`** / **`[LoraL]`** tags in that Prompt (or LLM output) are handled by LazyPrompt after enhancement.  
+- **`[Prompt]`** → sent on **`prompt_override`** only (LLM path); mutually exclusive with **`[desciption]`** in the same file. Optional closed **`[LoraH]`** / **`[LoraL]`** / **`[Lora1]`**–**`[Lora5]`** tags in that Prompt (or LLM output) are handled by LazyPrompt after enhancement.  
 - **`{left|right}`** in scenario text → random choice each queue run.  
 - **`scenario_2`** + strength sliders → second scenario LoRA set and tunable `[LoraHighA]` / `[LoraLowA]` model strength.
 
@@ -135,6 +136,7 @@ Install from `requirements.txt` if your ComfyUI environment is missing anything 
 - **Line endings:** Nodes normalize `\r\n` / `\r` to `\n`.
 - **Lazy Image Loader missing from menu:** Restart ComfyUI after updating the pack; node is under **`vsaan212/lazy`**.
 - **Lazy Multi Frame Select grid empty / won’t continue:** Restart ComfyUI so `js/lazy_multi_frame_select.js` loads; click **Continue** on the node (do not queue a second prompt).
+- **DEBUG logs:** set Comfy logging to **DEBUG** / detail. Nodes log under logger `vsaan212` (e.g. `SAS added lora "…"`, `Lazy Model Switcher set to "R2V" selecting ref2video_model`).
 
 ## License
 MIT (see `LICENSE`)

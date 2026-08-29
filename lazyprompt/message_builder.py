@@ -1,4 +1,10 @@
-"""Extra user-message context: environments, duration, I2V hints (LazyPrompt)."""
+"""Extra user-message context: environments (LazyPrompt).
+
+Duration, people, timeline, and content-tone rules live in Model_Skills/*.md
+(***VideoLength*** slot + SCENE POLICY). SAS ``[video_length]`` in the user
+text is kept so the model can size beats. This module composes user-message
+layers and optional environment-preset facts.
+"""
 from __future__ import annotations
 
 import random
@@ -6,11 +12,8 @@ import re
 
 from .environment_presets import ENVIRONMENT_PRESETS
 from .system_prompts import (
-    has_audio,
-    is_screenplay_skill,
     is_tag_style_model,
     is_video_model,
-    is_wan_skill,
 )
 
 
@@ -37,22 +40,44 @@ def _character_preface(character: str, target_model: str) -> str:
     return f"[SUBJECT / CHARACTER — {hint}]\n{ch}"
 
 
+_SAS_VIDEO_LENGTH_RE = re.compile(
+    r"\[video_length\][^\n]*(?:\n\s*(\d+(?:\.\d+)?)\s*s\s*)?",
+    re.IGNORECASE,
+)
+
+
+def parse_sas_video_length_sec(text: str) -> float | None:
+    """Seconds from a SAS ``[video_length]`` / ``12s`` block, if present."""
+    m = _SAS_VIDEO_LENGTH_RE.search(text or "")
+    if not m or not m.group(1):
+        return None
+    try:
+        sec = float(m.group(1))
+    except ValueError:
+        return None
+    return sec if sec > 0 else None
+
+
 def compose_user_scene_input(
     effective_user: str,
     *,
     scene_context: str = "",
     character: str = "",
     target_model: str = "",
+    user_instructions: str = "",
 ) -> str:
     """
-    Build the core user-message body: optional scene_context and character layers,
-    then user direction (scenario override or user_input). Always sent to the LLM,
-    including minimal mode (None target + prompt_override / system_prompt).
+    Build the core user-message body: optional scene_context, character,
+    user_instructions, then user direction (scenario override or user_input).
+    Always sent to the LLM, including minimal mode.
+    SAS ``[video_length]`` stays in the user text so the model can size beats.
     """
     user = (effective_user or "").strip()
     sc = (scene_context or "").strip()
     ch = (character or "").strip()
-    if not sc and not ch:
+    instr = (user_instructions or "").strip()
+
+    if not sc and not ch and not instr:
         return user
 
     layers: list[str] = []
@@ -66,104 +91,28 @@ def compose_user_scene_input(
         preface = _character_preface(ch, target_model)
         if preface:
             layers.append(preface)
-    layers.append(
-        "[USER DIRECTION — apply this as action, style, and mood over the above]\n"
-        + user
-    )
-    return "\n\n".join(layers)
+    if instr:
+        layers.append(
+            "[USER INSTRUCTIONS — mandatory for this run. "
+            "Named people, places, actions, shot times, and quoted dialogue are locked facts. "
+            "Write that scene. Do not treat the scene as missing or empty.]\n"
+            + instr
+        )
+    if user:
+        layers.append(
+            "[USER DIRECTION — apply this as action, style, and mood over the above]\n"
+            + user
+        )
+    return "\n\n".join(layers) if layers else user
 
 
 def build_prompt_augmentation(
     target_model: str,
     environment: str,
-    video_length_sec: float,
     seed: int,
-    has_scene_context: bool,
 ) -> str:
-    """
-    Text appended after the user's scene/instruction block.
-    Does not include the raw user idea — the caller prepends that with LTX-style wrappers.
-    Video length hints use seconds only (no frame/FPS math).
-    """
+    """Optional environment-preset facts appended after the user's scene block."""
     parts: list[str] = []
-
-    if is_video_model(target_model):
-        duration_sec = max(float(video_length_sec), 0.25)
-        duration_sec = round(duration_sec, 2)
-
-        if is_wan_skill(target_model):
-            parts.append(
-                f"VIDEO LENGTH: {duration_sec:g}s. "
-                f"Write 80-120 words. One clear shot progression with motion throughout.\n"
-            )
-        else:
-            if is_screenplay_skill(target_model):
-                if duration_sec <= 5:
-                    arc = (
-                        f"SHORT clip: {duration_sec:g}s. "
-                        f"Write the Characters block, Scene block, then 2–3 action beats."
-                    )
-                elif duration_sec <= 15:
-                    arc = (
-                        f"MEDIUM clip: {duration_sec:g}s. "
-                        f"Write the Characters block, Scene block, then 4–5 action beats."
-                    )
-                else:
-                    arc = (
-                        f"LONG clip: {duration_sec:g}s. "
-                        f"Write the Characters block, Scene block, then 6–8 action beats. "
-                        f"Depth over breadth — stay in the same location, go deeper into "
-                        f"the physical action and dialogue, do not introduce new locations."
-                    )
-            else:
-                if duration_sec <= 5:
-                    arc = (
-                        f"SHORT clip: {duration_sec:g}s. "
-                        f"4–5 sentences. Stay inside the scene the user described — "
-                        f"do not add locations, characters, or events they did not mention. "
-                        f"One subject, one action, one camera move. Close on sound."
-                    )
-                elif duration_sec <= 15:
-                    arc = (
-                        f"MEDIUM clip: {duration_sec:g}s. "
-                        f"5–6 sentences. Stay inside the scene the user described. "
-                        f"Go deeper — more texture, more physical detail, richer audio — "
-                        f"do not introduce new locations or characters the user did not mention. "
-                        f"Camera responds to each action. Close on sound."
-                    )
-                else:
-                    arc = (
-                        f"LONG clip: {duration_sec:g}s. "
-                        f"6–8 sentences. DEPTH NOT BREADTH — the extra length means more detail "
-                        f"on the same subject in the same scene, not more locations, not more characters, "
-                        f"not more events. Use it for: richer texture on the environment, "
-                        f"more physical detail on the subject, layered audio, "
-                        f"the camera moving closer or finding a new angle on the same action. "
-                        f"Everything in the prompt must come directly from what the user described. "
-                        f"Close on sound or silence."
-                    )
-            parts.append(f"VIDEO LENGTH: {arc}\n")
-
-    if has_scene_context:
-        if is_wan_skill(target_model):
-            parts.append(
-                "IMAGE / SCENE CONTEXT (I2V): A starting frame or detailed scene description was "
-                "provided above. Treat it as the first frame — describe how existing elements "
-                "should MOVE. Do NOT contradict the description. "
-                "Lock face and identity: describe motion, camera, and light changes. "
-                "Negative guidance: morphing, warping, face deformation, flickering.\n"
-            )
-        elif is_video_model(target_model):
-            parts.append(
-                "IMAGE / SCENE CONTEXT (I2V): Ground the prompt in exactly what the description "
-                "or start frame implies — hair, skin, clothing, environment, lighting. "
-                "Do not contradict it. The prompt describes this scene coming to life.\n"
-            )
-        else:
-            parts.append(
-                "REFERENCE CONTEXT (I2I): Use the scene description as grounding for subject, "
-                "style, lighting, and composition. Evolve or match it as appropriate for the target model.\n"
-            )
 
     env_data = ENVIRONMENT_PRESETS.get(environment)
     if env_data == "RANDOM":
@@ -179,13 +128,6 @@ def build_prompt_augmentation(
         if is_video_model(target_model):
             parts.append(f"  Sound: {sound}")
         parts.append("")
-
-    if has_audio(target_model):
-        parts.append(
-            "AUDIO: Video model generates audio. Include rich layered audio description: "
-            "foreground action + mid-ground ambient + background atmosphere. "
-            "Breathing and fabric are sound sources. Final sentence should land on sound.\n"
-        )
 
     if parts:
         return "\n".join(parts).rstrip() + "\n"

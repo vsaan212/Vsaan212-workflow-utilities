@@ -11,6 +11,7 @@ from PIL import Image, ImageOps
 
 import folder_paths
 
+from ..lazy_logging import debug
 from ..workflow_modes import (
     ROLE_FIRST_FRAME,
     WORKFLOW_ROLES,
@@ -160,11 +161,14 @@ def load_pil_image(filename: str) -> Image.Image:
 class LazyImageLoader:
     @classmethod
     def INPUT_TYPES(cls):
+        images = list_input_images()
+        # Empty first so a new node does not auto-select (and decode) an input file.
+        image_choices = [""] + images if images else [""]
         return {
             "required": {
                 "image": (
-                    list_input_images(),
-                    {"image_upload": True},
+                    image_choices,
+                    {"default": ""},
                 ),
                 "workflow_role": (
                     list(WORKFLOW_ROLES),
@@ -279,7 +283,7 @@ class LazyImageLoader:
     @classmethod
     def VALIDATE_INPUTS(cls, image, **kwargs):
         if not image:
-            return "Select or upload an image."
+            return True
         if not folder_paths.exists_annotated_filepath(image):
             return f"Image not found: {image}"
         return True
@@ -299,7 +303,14 @@ class LazyImageLoader:
         global_selector_input: str = "",
     ):
         mode = normalize_workflow(global_selector_input or "")
+        if not (image or "").strip():
+            debug("Lazy Image Loader", "skipped load (empty image)")
+            return (None, 0, 0)
         if not role_enabled(workflow_role, mode):
+            debug(
+                "Lazy Image Loader",
+                f"gated off (role {workflow_role}, mode {mode or 'unset'})",
+            )
             return (None, 0, 0)
 
         pil = load_pil_image(image)
@@ -331,6 +342,10 @@ class LazyImageLoader:
                 pil = pil.resize((tw, th), Image.Resampling.LANCZOS)
 
         tensor = pil_to_tensor(pil)
+        debug(
+            "Lazy Image Loader",
+            f"loaded {image} {pil.width}x{pil.height} (role {workflow_role})",
+        )
         return (tensor, pil.width, pil.height)
 
 

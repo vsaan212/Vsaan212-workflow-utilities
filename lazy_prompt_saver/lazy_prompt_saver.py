@@ -75,4 +75,6 @@ class LazyPromptSaver:
         return float("NaN")
 
     def execute(self, prompt_name, prompt_text, saved_prompts):
+        from ..lazy_logging import debug
+        debug("Lazy Prompt Saver", f"passing through '{prompt_name or saved_prompts}'")
         return (prompt_text,)

@@ -28,11 +28,12 @@ from .environment_presets import ENVIRONMENT_PRESETS
 from .message_builder import (
     build_prompt_augmentation,
     compose_user_scene_input,
+    parse_sas_video_length_sec,
     split_positive_negative_block,
 )
 from .system_prompts import (
     SKILLS_HINT,
-    apply_user_prompt_injection,
+    apply_skill_runtime,
     get_default_target_model,
     get_system_prompt,
     get_target_model_choices,
@@ -49,38 +50,62 @@ import folder_paths
 
 # Closed Prompt-side LoRA markers (LLM / [Prompt] output). Distinct from SAS file
 # section tags like [LoraHighA]. Parsed after the LLM (or bypass), then stripped.
+# LoraH / LoraL = Wan high/low. Lora1–Lora5 = singular (MiniMax / LTX / image).
+# Optional strength: [Lora1[0.5]]path[/Lora1] or [Lora1[0.5][0.8]]path[/Lora1]
+# (model strength; optional clip strength, default 1.0).
 _LORA_PROMPT_BLOCK_RE = re.compile(
-    r"\[(LoraH|LoraL)\](.*?)\[/\1\]",
+    r"\[(LoraH|LoraL|Lora[1-5])((?:\[[^\[\]]+\]){0,2})\]"
+    r"(.*?)"
+    r"\[/\s*(LoraH|LoraL|Lora[1-5])\s*\]",
     re.IGNORECASE | re.DOTALL,
 )
+_LORA_NUMBERED_KINDS = tuple(f"lora{i}" for i in range(1, 6))
 
 
-def parse_and_strip_prompt_loras(text: str) -> tuple[str, list[str], list[str]]:
+def _parse_lora_strengths(blob: str) -> tuple[float, float]:
+    """[0.5] → model 0.5 clip 1.0; [0.5][0.8] → both. Invalid values ignored."""
+    nums: list[float] = []
+    for raw in re.findall(r"\[([^\[\]]+)\]", blob or ""):
+        try:
+            nums.append(float(raw.strip()))
+        except ValueError:
+            continue
+    if not nums:
+        return 1.0, 1.0
+    if len(nums) == 1:
+        return nums[0], 1.0
+    return nums[0], nums[1]
+
+
+def parse_and_strip_prompt_loras(text: str) -> tuple[str, list[tuple]]:
     """
-    Pull [LoraH]path[/LoraH] / [LoraL]path[/LoraL] out of Prompt text.
+    Pull Prompt LoRA blocks out of text.
 
-    Returns (clean_text, high_paths, low_paths). Empty / bypass paths are omitted
-    from the load lists but still removed from the text.
+    Returns (clean_text, specs) where each spec is
+    ``(kind, path, strength_model, strength_clip)``.
+    ``kind`` is ``lorah``, ``loral``, or ``lora1``…``lora5``.
+    Empty / bypass paths are omitted from specs but still removed from the text.
     """
     if not text:
-        return "", [], []
+        return "", []
 
-    high: list[str] = []
-    low: list[str] = []
-    for match in _LORA_PROMPT_BLOCK_RE.finditer(text):
-        kind = (match.group(1) or "").lower()
-        path = (match.group(2) or "").strip().strip('"').strip("'")
-        if not path or path.lower() == "bypass":
-            continue
-        if kind == "lorah":
-            high.append(path)
-        else:
-            low.append(path)
+    specs: list[tuple] = []
 
-    clean = _LORA_PROMPT_BLOCK_RE.sub("", text)
+    def _collect(match: re.Match) -> str:
+        open_kind = (match.group(1) or "").lower()
+        close_kind = (match.group(4) or "").lower()
+        if open_kind != close_kind:
+            return match.group(0)
+        path = (match.group(3) or "").strip().strip('"').strip("'")
+        if path and path.lower() != "bypass":
+            sm, sc = _parse_lora_strengths(match.group(2) or "")
+            specs.append((open_kind, path, sm, sc))
+        return ""
+
+    clean = _LORA_PROMPT_BLOCK_RE.sub(_collect, text)
     clean = re.sub(r"[ \t]+\n", "\n", clean)
     clean = re.sub(r"\n{3,}", "\n\n", clean).strip()
-    return clean, high, low
+    return clean, specs
 
 
 def _resolve_prompt_lora_name(cmd: str) -> str:
@@ -96,13 +121,13 @@ def _resolve_prompt_lora_name(cmd: str) -> str:
     return path
 
 
-def _apply_prompt_lora_paths(model, clip, paths: list[str], label: str):
-    """Apply LoRA paths to a MODEL+CLIP pair (stock LoraLoader). No-op if empty."""
-    if not paths:
+def _apply_prompt_lora_specs(model, clip, specs: list[tuple], label: str):
+    """Apply LoRA specs (path, model strength, clip strength) via stock LoraLoader."""
+    if not specs:
         return model, clip
     if model is None:
         print(
-            f"[LazyPrompt] {label}: {len(paths)} path(s) in Prompt but model not wired — skipped."
+            f"[LazyPrompt] {label}: {len(specs)} LoRA(s) in Prompt but model not wired — skipped."
         )
         return model, clip
     if clip is None:
@@ -112,26 +137,36 @@ def _apply_prompt_lora_paths(model, clip, paths: list[str], label: str):
     from nodes import LoraLoader
 
     loader = LoraLoader()
-    for path in paths:
+    for _kind, path, strength_model, strength_clip in specs:
         lora_name = _resolve_prompt_lora_name(path)
         if not lora_name or lora_name.lower() == "bypass":
             continue
-        print(f"[LazyPrompt] {label}: loading {lora_name}")
-        model, clip = loader.load_lora(model, clip, lora_name, 1.0, 1.0)
+        print(
+            f"[LazyPrompt] {label}: loading {lora_name} "
+            f"(model {strength_model:g}, clip {strength_clip:g})"
+        )
+        model, clip = loader.load_lora(
+            model, clip, lora_name, float(strength_model), float(strength_clip)
+        )
     return model, clip
 
 
-def _unique_lora_paths(*groups: list[str]) -> list[str]:
-    seen: set[str] = set()
-    out: list[str] = []
+def _unique_lora_specs(*groups: list[tuple]) -> list[tuple]:
+    seen: set[tuple] = set()
+    out: list[tuple] = []
     for group in groups:
-        for path in group:
-            key = path.lower()
+        for spec in group:
+            key = (spec[0], spec[1].lower(), spec[2], spec[3])
             if key in seen:
                 continue
             seen.add(key)
-            out.append(path)
+            out.append(spec)
     return out
+
+
+def _specs_of_kind(specs: list[tuple], *kinds: str) -> list[tuple]:
+    want = {k.lower() for k in kinds}
+    return [s for s in specs if s[0] in want]
 
 
 def apply_prompt_lora_blocks(
@@ -140,51 +175,73 @@ def apply_prompt_lora_blocks(
     clip_high=None,
     model_low=None,
     clip_low=None,
+    lora_model=None,
+    lora_clip=None,
     also_collect_from: str = "",
 ):
     """
-    Strip Prompt LoRA blocks and load them onto high/low stacks (like SAS slots).
+    Strip Prompt LoRA blocks and load them onto wired stacks.
 
-    LoraH → model_high / clip_high; LoraL → model_low (clip_low, or clip_high if
-    low CLIP is unwired). Strengths default to 1.0.
+    - LoraH → model_high / clip_high
+    - LoraL → model_low (clip_low, or clip_high if low CLIP is unwired)
+    - Lora1–Lora5 → lora_model (clip: lora_clip, else clip_high), in slot order 1→5
+
+    Strengths: ``[Lora1[0.5]]path[/Lora1]`` (model; clip defaults to 1.0) or
+    ``[Lora1[0.5][0.8]]path[/Lora1]`` (model then clip).
 
     Paths are taken from the final Prompt text and optionally from
     ``also_collect_from`` (e.g. scenario ``[Prompt]`` / override) so authored
     tags still load if the LLM rewrites the scene without echoing them.
     Only ``prompt_text`` is stripped for the string outputs.
     """
-    clean, high_out, low_out = parse_and_strip_prompt_loras(prompt_text or "")
-    high_in: list[str] = []
-    low_in: list[str] = []
+    clean, specs_out = parse_and_strip_prompt_loras(prompt_text or "")
+    specs_in: list[tuple] = []
     extra = (also_collect_from or "").strip()
     if extra and extra != (prompt_text or ""):
-        _, high_in, low_in = parse_and_strip_prompt_loras(extra)
+        _, specs_in = parse_and_strip_prompt_loras(extra)
 
-    high_paths = _unique_lora_paths(high_in, high_out)
-    low_paths = _unique_lora_paths(low_in, low_out)
-    if high_paths or low_paths:
+    specs = _unique_lora_specs(specs_in, specs_out)
+    high_specs = _specs_of_kind(specs, "lorah")
+    low_specs = _specs_of_kind(specs, "loral")
+    numbered_specs: list[tuple] = []
+    for kind in _LORA_NUMBERED_KINDS:
+        numbered_specs.extend(_specs_of_kind(specs, kind))
+
+    if high_specs or low_specs or numbered_specs:
         print(
-            f"[LazyPrompt] Prompt LoRA blocks: {len(high_paths)} LoraH, "
-            f"{len(low_paths)} LoraL — stripped before model handoff."
+            f"[LazyPrompt] Prompt LoRA blocks: {len(high_specs)} LoraH, "
+            f"{len(low_specs)} LoraL, {len(numbered_specs)} Lora1–5 "
+            "— stripped before model handoff."
         )
 
-    model_h, clip_h = _apply_prompt_lora_paths(
-        model_high, clip_high, high_paths, "LoraH"
+    model_h, clip_h = _apply_prompt_lora_specs(
+        model_high, clip_high, high_specs, "LoraH"
     )
     if model_low is not None:
         clip_for_low = clip_low if clip_low is not None else clip_high
-        model_l, clip_l_applied = _apply_prompt_lora_paths(
-            model_low, clip_for_low, low_paths, "LoraL"
+        model_l, clip_l_applied = _apply_prompt_lora_specs(
+            model_low, clip_for_low, low_specs, "LoraL"
         )
         clip_l = clip_l_applied if clip_low is not None else None
     else:
-        if low_paths:
+        if low_specs:
             print(
                 "[LazyPrompt] LoraL path(s) in Prompt but model_low not wired — skipped."
             )
         model_l, clip_l = None, None
 
-    return clean, model_h, model_l, clip_h, clip_l
+    clip_for_singular = lora_clip if lora_clip is not None else clip_high
+    model_s, clip_s_applied = _apply_prompt_lora_specs(
+        lora_model, clip_for_singular, numbered_specs, "Lora1–5"
+    )
+    if lora_clip is not None:
+        clip_s = clip_s_applied
+    else:
+        clip_s = None
+        if numbered_specs and lora_model is not None and clip_high is not None:
+            clip_h = clip_s_applied
+
+    return clean, model_h, model_l, clip_h, clip_l, model_s, clip_s
 
 
 def _strip_input_prefix(path: str) -> str:
@@ -456,7 +513,12 @@ class LazyPromptEngineer:
                     "max": 300.0,
                     "step": 0.25,
                     "display": "number",
-                    "tooltip": "Video duration in seconds. Injected into the LLM prompt for video skills. Image skills ignore this.",
+                    "tooltip": (
+                        "Video duration in seconds. Filled into the skill's ***VideoLength*** slot "
+                        "for video skills. Image skills strip that slot. If SAS "
+                        "[video_length] is in the user/override text, that value is used "
+                        "instead (and kept in the user message). Timing rules live in the skill MD."
+                    ),
                 }),
                 "env_seed": ("INT", {
                     "default": 0,
@@ -513,9 +575,7 @@ class LazyPromptEngineer:
                     "display": "number",
                     "tooltip": (
                         "Hard cap on completion length (HF max_new_tokens / LM Studio max_tokens / "
-                        "TextGenerate max_length). "
-                        "The pacing hint asks the model for ~one-third of this many tokens by default — "
-                        "raise both together for longer prompts (e.g. 1500 max → ~500 target)."
+                        "TextGenerate max_length). Raise this for longer cinematic prompts."
                     ),
                 }),
                 "system_prompt": ("STRING", {
@@ -600,9 +660,9 @@ class LazyPromptEngineer:
                     "multiline": True,
                     "tooltip": (
                         "From Lazy-subject-and-scene-automation selector. Mode tags always apply. "
-                        "Direct image/audio sockets are ignored only when the blob includes "
-                        "ReferenceImage/AudioReference paths (disk load). Workflow-only blobs "
-                        "keep wired Lazy Image Loader frames."
+                        "Disk [ReferenceImageN] / [AudioReference] overlay matching slots only "
+                        "(typically reference_image_1 and reference_audio). Other wired "
+                        "reference_image_2..5 stay. Workflow-only blobs keep all sockets."
                     ),
                 }),
                 "prompt_override_input": ("STRING", {
@@ -619,9 +679,10 @@ class LazyPromptEngineer:
                     "forceInput": True,
                     "multiline": True,
                     "tooltip": (
-                        "Optional temporary instructions. When non-empty, injected between "
-                        "***UserPrompt*** / ***UserPromptEnd*** in the system prompt. "
-                        "Empty = block omitted (nothing passed)."
+                        "Optional temporary instructions. When non-empty: filled into "
+                        "***UserPrompt*** / ***UserPromptEnd*** in the skill (or override), "
+                        "and copied into the user message as locked scene facts. "
+                        "Empty = that skill section is omitted."
                     ),
                 }),
                 "model_high": ("MODEL", {
@@ -648,6 +709,19 @@ class LazyPromptEngineer:
                         "If unwired, LoraL still patches model_low using clip_high."
                     ),
                 }),
+                "lora_model": ("MODEL", {
+                    "tooltip": (
+                        "Singular model for Prompt [Lora1]–[Lora5] (MiniMax / LTX / Flux / SDXL). "
+                        "Wire SAS minimax_model, video_model, or image_model here. "
+                        "Wan dual-stack keeps using model_high / model_low + LoraH / LoraL."
+                    ),
+                }),
+                "lora_clip": ("CLIP", {
+                    "tooltip": (
+                        "CLIP paired with lora_model for [Lora1]–[Lora5]. "
+                        "If unwired, clip_high is used as the companion (same as SAS)."
+                    ),
+                }),
             },
         }
 
@@ -668,6 +742,8 @@ class LazyPromptEngineer:
         "MODEL",
         "CLIP",
         "CLIP",
+        "MODEL",
+        "CLIP",
     )
     RETURN_NAMES = (
         "PROMPT",
@@ -686,6 +762,8 @@ class LazyPromptEngineer:
         "model_low",
         "clip_high",
         "clip_low",
+        "lora_model",
+        "lora_clip",
     )
     FUNCTION = "generate"
     CATEGORY = "vsaan212/LazyPrompt"
@@ -942,6 +1020,7 @@ class LazyPromptEngineer:
         # 5. Strip leaked internal pacing/time tags the model sometimes echoes back
         text = re.sub(r"\[TIME LIMIT[^\]]*\]", "", text, flags=re.IGNORECASE).strip()
         text = re.sub(r"\[PACING[^\]]*\]",     "", text, flags=re.IGNORECASE).strip()
+        text = re.sub(r"\[ENHANCE MODE[^\]]*\]", "", text, flags=re.IGNORECASE).strip()
 
         # Strip leaked timestamp — e.g. "(42221149502953 seconds)" or "(0:00 - 4:00)"
         text = re.sub(r"\s*\(\d+\s+seconds?\)\s*$", "", text).strip()
@@ -1458,6 +1537,8 @@ class LazyPromptEngineer:
         clip_high=None,
         model_low=None,
         clip_low=None,
+        lora_model=None,
+        lora_clip=None,
         # Legacy kwargs from older workflows (ignored)
         screenplay_mode=False,
         invent_dialogue=False,
@@ -1473,57 +1554,70 @@ class LazyPromptEngineer:
         if character_text:
             print("[LazyPrompt] character (subject) prepended to LLM user message.")
 
-        # ── Media gating (global selector / SAS disk override) ────────────────
+        # ── Media gating (global selector / SAS disk overlay) ────────────────
         sas_blob = (SAS_automation_selector_input or "").strip()
         sel = parse_selector_tagged(sas_blob) if sas_blob else {}
-        # Only override direct IMAGE/AUDIO sockets when the blob carries media paths.
-        # A Workflow-only blob (common when Global Selector → SAS → PE) must NOT
-        # discard wired Lazy Image Loader frames — that was dropping LM Studio vision.
-        sas_path_override = any(
-            (sel.get(f"referenceimage{i}", "") or "").strip() for i in range(1, 6)
-        ) or bool((sel.get("audioreference", "") or "").strip())
 
         mode = resolve_mode_from_selector(sas_blob) if sas_blob else None
         if not mode:
             mode = resolve_mode_from_selector(global_selector_input or "")
 
-        if sas_path_override:
+        from ..lazy_logging import debug as _lazy_debug
+        _lazy_debug(
+            "LazyPrompt",
+            f"mode {mode or 'unset'} target {target_model}",
+        )
+
+        ff = first_frame if first_frame is not None else image
+        lf = last_frame
+        refs = [
+            reference_image_1,
+            reference_image_2,
+            reference_image_3,
+            reference_image_4,
+            reference_image_5,
+        ]
+        audio = reference_audio
+
+        # Overlay SAS disk paths onto matching slots only. Empty SAS slots must
+        # NOT wipe wired reference_image_2..5 (or extra audio). Typical subject
+        # files set ReferenceImage1 + AudioReference.
+        overlaid = []
+        for i in range(1, 6):
+            tensor = _load_image_tensor_from_input(sel.get(f"referenceimage{i}", ""))
+            if tensor is not None:
+                refs[i - 1] = tensor
+                overlaid.append(f"reference_image_{i}")
+        sas_audio = _load_audio_dict_from_input(sel.get("audioreference", ""))
+        if sas_audio is not None:
+            audio = sas_audio
+            overlaid.append("reference_audio")
+
+        if overlaid:
             print(
-                "[LazyPrompt] SAS selector has ReferenceImage/AudioReference paths — "
-                "loading media from disk; ignoring direct image/audio sockets."
+                "[LazyPrompt] SAS selector disk paths overlay "
+                + ", ".join(overlaid)
+                + "; keeping other wired image/audio sockets."
             )
-            ff = _load_image_tensor_from_input(sel.get("referenceimage1", ""))
-            lf = _load_image_tensor_from_input(sel.get("referenceimage2", ""))
-            refs = [
-                _load_image_tensor_from_input(sel.get(f"referenceimage{i}", ""))
-                for i in range(1, 6)
-            ]
-            audio = _load_audio_dict_from_input(sel.get("audioreference", ""))
+            # Dual-use: SAS ReferenceImage1/2 also fill first/last for I2V/FL2V
             if mode in ("I2V", "FL2V", None):
-                if ff is None and refs[0] is not None:
+                if refs[0] is not None and (
+                    ff is None or "reference_image_1" in overlaid
+                ):
                     ff = refs[0]
-                if lf is None and refs[1] is not None:
+                if refs[1] is not None and (
+                    lf is None or "reference_image_2" in overlaid
+                ):
                     lf = refs[1]
-            out_first, out_last, out_refs, out_audio, mode = _gate_media_for_mode(
-                mode, ff, lf, refs, audio, sas_override=True
+
+        out_first, out_last, out_refs, out_audio, mode = _gate_media_for_mode(
+            mode, ff, lf, refs, audio, sas_override=bool(overlaid)
+        )
+        if sas_blob and not overlaid:
+            print(
+                "[LazyPrompt] SAS selector has mode/tags but no media paths — "
+                f"using direct sockets (first_frame={'yes' if ff is not None else 'no'})."
             )
-        else:
-            ff = first_frame if first_frame is not None else image
-            refs = [
-                reference_image_1,
-                reference_image_2,
-                reference_image_3,
-                reference_image_4,
-                reference_image_5,
-            ]
-            out_first, out_last, out_refs, out_audio, mode = _gate_media_for_mode(
-                mode, ff, last_frame, refs, reference_audio, sas_override=False
-            )
-            if sas_blob and not sas_path_override:
-                print(
-                    "[LazyPrompt] SAS selector has mode/tags but no media paths — "
-                    f"using direct sockets (first_frame={'yes' if ff is not None else 'no'})."
-                )
 
         if not mode:
             # Infer from what survived / was provided
@@ -1541,12 +1635,14 @@ class LazyPromptEngineer:
         def _pack(prompt_text, preview_text, neg_text):
             # After LLM (or bypass): apply Prompt [LoraH]/[LoraL] to stacks, strip tags
             # so the diffusion model never sees the loader markers.
-            clean, mh, ml, ch, cl = apply_prompt_lora_blocks(
+            clean, mh, ml, ch, cl, lm, lc = apply_prompt_lora_blocks(
                 prompt_text,
                 model_high=model_high,
                 clip_high=clip_high,
                 model_low=model_low,
                 clip_low=clip_low,
+                lora_model=lora_model,
+                lora_clip=lora_clip,
                 also_collect_from=effective_user,
             )
             # preview_text matches prompt_text in all current call sites; strip both.
@@ -1572,6 +1668,8 @@ class LazyPromptEngineer:
                 ml,
                 ch,
                 cl,
+                lm,
+                lc,
             )
 
         # Vision payloads for LM Studio / TextGenerate:
@@ -1633,57 +1731,33 @@ class LazyPromptEngineer:
 
         max_tokens_actual = max(96, min(int(max_output_tokens), _ABS_MAX_OUTPUT_TOKENS))
         reply_target = max(32, max_tokens_actual // 3)
+        instruction_text = (user_instructions or "").strip()
 
-        # --- Video: length in seconds only; beats derived from duration ---
+        # Duration: skill ***VideoLength*** slot. SAS [video_length] in the user
+        # text is kept (compose_user_scene_input) and also drives this slot when present.
+        sas_duration = parse_sas_video_length_sec(effective_user)
         if is_vid:
-            real_seconds = max(float(video_length), 0.25)
-            action_count = max(1, min(10, round(real_seconds / 4)))
-            if action_count == 1:
-                pacing_hint = (
-                    f"This clip is {real_seconds:.0f} seconds long. "
-                    f"Write EXACTLY 1 action. One single moment. "
-                    f"Do not describe anything before or after it. No setup, no resolution. "
-                    f"HARD STOP after the 1st action. Do not continue."
-                )
-            else:
-                ordinal = {2: "2nd", 3: "3rd"}.get(action_count, f"{action_count}th")
-                pacing_hint = (
-                    f"This clip is {real_seconds:.0f} seconds long. "
-                    f"Write EXACTLY {action_count} distinct actions — NO MORE THAN {action_count}. "
-                    f"Each action takes roughly {real_seconds / action_count:.0f} seconds of screen time. "
-                    f"Do not add setup, backstory, or resolution beyond these {action_count} actions. "
-                    f"Dialogue counts as an action if it interrupts the physical scene — budget it inside one of your {action_count} beats, not as an extra beat. "
-                    f"HARD STOP after the {ordinal} action is complete. The scene ends there. Do not write a {action_count + 1}th action under any circumstances."
-                )
+            real_seconds = (
+                float(sas_duration)
+                if sas_duration
+                else max(float(video_length), 0.25)
+            )
             min_tokens = max(
                 16,
                 min(int(reply_target * 0.75), max_tokens_actual - 1),
             )
-            length_instruction = (
-                f"\n[PACING — THIS IS MANDATORY: {pacing_hint} "
-                f"Write approximately {reply_target} tokens total (hard cap {max_tokens_actual} new tokens). "
-                f"Do not exceed the action count above under any circumstances. "
-                f"Do NOT write the token count, word count, action number, or any parenthetical summary, checklist, or compliance note at the end — "
-                f"the scene ends with the last sentence of prose. Nothing after it. No brackets. No notes. No confirmation.]"
-            )
             print(
-                f"[LazyPrompt] Video tokens: ~{reply_target} pacing target / {max_tokens_actual} max new tokens "
-                f"(actions: {action_count}, length: {real_seconds:g}s)"
+                f"[LazyPrompt] Video tokens: ~{reply_target} target / {max_tokens_actual} max new tokens "
+                f"(length: {real_seconds:g}s; timing rules from skill)"
             )
         else:
             real_seconds = 0.0
-            action_count = 1
             min_tokens = max(
                 16,
                 min(int(reply_target * 0.75), max_tokens_actual - 1),
             )
-            length_instruction = (
-                "\n[FORMAT: Follow the system prompt exactly for the image target. "
-                f"Aim for roughly {reply_target} tokens of descriptive output (hard cap {max_tokens_actual} new tokens). "
-                "No preamble, no meta commentary in your reply.]\n"
-            )
             print(
-                f"[LazyPrompt] Image tokens: ~{reply_target} pacing target / {max_tokens_actual} max new tokens"
+                f"[LazyPrompt] Image tokens: ~{reply_target} target / {max_tokens_actual} max new tokens"
             )
 
         # --- Seed ---
@@ -1701,163 +1775,7 @@ class LazyPromptEngineer:
         if not use_lm_studio and not use_textgenerate:
             stop_token_ids = self._build_stop_token_ids()
 
-        # --- Content tier detection ---
-        # Three tiers based on what the user actually asked for.
-        # Tier 1 — Neutral:  no nudity/sex words → no explicit instruction
-        # Tier 2 — Sensual:  nudity/undressing implied but no anatomical terms
-        #                    → restrain the model from self-escalating
-        # Tier 3 — Explicit: user used anatomical terms → full explicit instruction
-
-        # Tier 3 triggers: direct anatomical / act terms
-        _explicit_re = re.compile(
-            r"\b(pussy|cock|dick|penis|vagina|clit|clitoris|anus|asshole|"
-            r"tits|cum|orgasm|fuck|fucking|blowjob|handjob|penetrat\w*|"
-            r"thrust\w*)\b",
-            re.IGNORECASE,
-        )
-
-        # Tier 2 triggers: nudity/sensuality implied but not explicit
-        _sensual_re = re.compile(
-            r"\b(naked|nude|topless|undress\w*|strip\w*|takes?\s+off|"
-            r"removes?\s+(her|his|their|the)?\s*\w*\s*"
-            r"(shirt|dress|top|bra|pants|jeans|clothes|clothing|outfit|underwear|skirt|jacket|coat|robe)|"
-            r"disrobe\w*|unbutton\w*|unzip\w*|peels?\s+off|pulls?\s+off|"
-            r"shed\w*\s+(her|his|their)?\s*(clothes|clothing|shirt|dress)|"
-            r"sensual|erotic|intimate|lingerie|bare\s+skin|bare\s+body)\b",
-            re.IGNORECASE,
-        )
-
-        is_explicit    = bool(_explicit_re.search(effective_user + " " + character_text))
-        is_sensual     = bool(_sensual_re.search(effective_user + " " + character_text)) and not is_explicit
-
-        # Undressing detection still used inside tier 3 for the mandatory segment rule
-        _undress_re = re.compile(
-            r"\b(undress\w*|strip\w*|takes?\s+off|"
-            r"removes?\s+(her|his|their|the)?\s*\w*\s*"
-            r"(shirt|dress|top|bra|pants|jeans|clothes|clothing|outfit|underwear|skirt|jacket|coat|robe)|"
-            r"disrobe\w*|unbutton\w*|unzip\w*|peels?\s+off|pulls?\s+off|"
-            r"shed\w*\s+(her|his|their)?\s*(clothes|clothing|shirt|dress))\b",
-            re.IGNORECASE,
-        )
-        has_undressing = bool(_undress_re.search(effective_user + " " + character_text))
-
-        if is_explicit:
-            # ── Tier 3: user asked for explicit content ──────────────────────
-            explicit_instruction = (
-                "\n[INSTRUCTION: This is an explicit adult scene. "
-                "You MUST use direct anatomical terms — pussy, cock, anus, clit, ass — exactly as written. "
-                "These are REQUIRED words, not optional. Do not replace them with 'sex', 'crevice', 'core', "
-                "'womanhood', 'manhood', or any other euphemism or metaphor. "
-                "If the user said 'pussy', write 'pussy' every time. "
-                "UNDRESSING SEGMENT — MANDATORY: If the subject starts clothed, you MUST write a dedicated undressing segment "
-                "before ANY explicit act or nudity. This is not a brief mention — it is a full narrative beat. "
-                "Go garment by garment: name it, describe how it is removed (fingers, zipper, pulling over the head, stepping out of), "
-                "describe what body part is revealed and how it looks. Then the next garment. Then the next. "
-                "The camera must linger on each reveal. Do not compress. Do not summarise. Do not skip to naked. "
-                "The undressing IS the scene — write it with the same density and length as the explicit act that follows. "
-                "Always state the character's age as a specific number. "
-                "Describe body parts, positions, and physical actions with blunt, specific language. "
-                "Every anatomical detail must be stated plainly — no softening, no implying, no cutting away.]"
-            )
-        elif is_sensual:
-            # ── Tier 2: nudity/undressing implied — sensual but not pornographic ─
-            undress_clause = (
-                "UNDRESSING SEGMENT — MANDATORY: The prompt involves clothing removal or nudity. "
-                "Write a dedicated undressing segment as its own narrative beat — garment by garment, "
-                "describing how each is removed and what is physically revealed at each step. "
-                "The camera lingers on each reveal. Do not skip or compress. "
-                "Describing bare skin, curves, and the naked body is appropriate and expected. "
-            ) if has_undressing else ""
-            explicit_instruction = (
-                "\n[INSTRUCTION: This scene involves nudity or sensual content. "
-                "Describing the bare body naturally is appropriate — skin, curves, flesh, nakedness. "
-                "However, do NOT zoom in on or explicitly describe genitals. "
-                "Do NOT introduce sexual acts the user did not ask for. "
-                "Do NOT self-escalate beyond what the user described. "
-                "Keep the tone sensual and cinematic — not pornographic. "
-                "Always state the character's age as a specific number. "
-                + undress_clause + "]"
-            )
-        else:
-            # ── Tier 1: neutral — just enforce age rule ──────────────────────
-            explicit_instruction = (
-                "\n[INSTRUCTION: Always state the character's age as a specific number, "
-                "e.g. 'a 34-year-old man' — never omit or approximate it.]"
-            )
-
-
-        # --- Sequence detection ---
-        # If the user wrote numbered steps (1. 2. 3. etc), detect them and inject
-        # an instruction to follow that exact order — no reordering, no skipping.
-        _sequence_re = re.compile(
-            r"^\s*(\d+[\.\):])\s+.+", re.MULTILINE
-        )
-        sequence_steps = _sequence_re.findall(effective_user)
-        if len(sequence_steps) >= 2:
-            step_count = len(sequence_steps)
-            sequence_instruction = (
-                f"\n[SEQUENCE INSTRUCTION: The user has provided {step_count} numbered steps. "
-                f"You MUST follow them in exact order — step 1 first, then step 2, and so on. "
-                f"Do not reorder, skip, or merge steps. Each step is one distinct beat in the scene. "
-                f"Do not add actions before step 1 or after step {step_count}.]"
-            )
-        else:
-            sequence_instruction = ""
-
-        # --- Person detection ---
-        # If the input contains no reference to a person, inject an instruction
-        # telling the model to write a pure scene — no invented characters.
-        _person_re = re.compile(
-            r"\b(he|she|his|her|him|they|them|their|man|men|woman|women|girl|girls|boy|boys|guy|guys|"
-            r"person|people|couple|figure|character|model|actress|actor|"
-            r"someone|anybody|nobody|stranger|friend|lover|wife|husband|"
-            r"boyfriend|girlfriend|teenager|teenagers|adult|adults|female|male|blonde|brunette|"
-            r"redhead|nude|naked|singer|dancer|performer|athlete|soldier|worker|"
-            r"player|nurse|doctor|student|teacher|child|children|kid|kids|crowd|audience)\b",
-            re.IGNORECASE,
-        )
-        _context_for_detection = effective_user + " " + (scene_context or "") + " " + character_text
-        has_person = bool(_person_re.search(_context_for_detection))
-        if not has_person:
-            no_person_instruction = (
-                "\n[SCENE INSTRUCTION: The user has not described any person or character. "
-                "Do NOT invent or introduce any human figures, silhouettes, voices, or implied presence. "
-                "This is a pure environment or object scene. Write only what the user described — "
-                "the setting, objects, light, atmosphere, and motion of non-human elements. "
-                "No characters. No 'someone', no 'a figure', no implied human presence of any kind. "
-                "No dialogue, no whispers, no voices. Sound is limited to the environment only — "
-                "wind, rain, fire, machinery, animals, ambient room tone. Nothing with a human source.]"
-            )
-        else:
-            no_person_instruction = ""
-
-        # --- Multi-subject detection ---
-        # If the input describes two or more people, inject a spatial instruction
-        # so the model tracks who is doing what and where they are relative to
-        # each other and the camera — otherwise it tends to lose track.
-        _multi_re = re.compile(
-            r"\b(two\s+(women|men|people|girls|guys|characters|figures)|"
-            r"both\s+(of\s+them|women|men|girls|guys)|"
-            r"(she|he)\s+and\s+(she|he|her|him)|"
-            r"(a\s+man\s+and\s+a\s+woman|a\s+woman\s+and\s+a\s+man)|"
-            r"(a\s+man\s+and\s+a\s+man|a\s+woman\s+and\s+a\s+woman)|"
-            r"couple|trio|they\s+(kiss|touch|embrace|undress|fuck|have))\b",
-            re.IGNORECASE,
-        )
-        has_multi_subject = bool(_multi_re.search(_context_for_detection))
-        if has_multi_subject:
-            multi_instruction = (
-                "\n[MULTI-SUBJECT INSTRUCTION: This scene has two or more people. "
-                "For EACH person establish: their position in the frame (left/right/foreground/background), "
-                "their spatial relationship to the other person (facing, beside, behind, above, etc.), "
-                "and keep track of who is doing what throughout — never let actions become ambiguous. "
-                "When referring back to them use consistent descriptors (e.g. 'the dark-haired woman', "
-                "'the taller man') — not just 'she' or 'he' which causes confusion with two subjects.]"
-            )
-        else:
-            multi_instruction = ""
-
-        # Dialogue rules live in Model_Skills/*.md (e.g. LTX 2.3 Dialog) — no runtime invent_dialogue toggle.
+        # Dialogue / people / timeline / content-tone rules live in Model_Skills/*.md.
 
         # --- Scene / subject / user direction (always in LLM user message) ---
         effective_input = compose_user_scene_input(
@@ -1865,6 +1783,7 @@ class LazyPromptEngineer:
             scene_context=scene_context or "",
             character=character_text,
             target_model=target_model,
+            user_instructions=instruction_text,
         )
 
         if minimal_llm:
@@ -1880,15 +1799,10 @@ class LazyPromptEngineer:
                 "no augmentation block or user_tail injections."
             )
         else:
-            has_visual_context = bool(scene_context and scene_context.strip()) or (
-                (use_lm_studio or use_textgenerate) and bool(vision_images)
-            )
             aug = build_prompt_augmentation(
                 target_model=target_model,
                 environment=environment,
-                video_length_sec=real_seconds if is_vid else 0.0,
                 seed=env_seed,
-                has_scene_context=has_visual_context,
             )
             if aug.strip():
                 effective_input = effective_input.rstrip() + "\n\n---\n" + aug
@@ -1909,23 +1823,24 @@ class LazyPromptEngineer:
         base_system = (system_prompt.strip() if system_prompt else "") or get_system_prompt(
             target_model
         )
-        effective_system_prompt = apply_user_prompt_injection(
-            base_system, user_instructions or ""
+        effective_system_prompt = apply_skill_runtime(
+            base_system,
+            user_instructions=user_instructions or "",
+            video_length_sec=real_seconds if is_vid else 0.0,
         )
         if (user_instructions or "").strip():
             print("[LazyPrompt] user_instructions injected into ***UserPrompt*** block.")
+        if is_vid:
+            src = "SAS [video_length]" if sas_duration else "video_length widget"
+            print(
+                f"[LazyPrompt] video_length {real_seconds:g}s from {src} "
+                "injected into ***VideoLength*** slot (kept in user message)."
+            )
 
         if minimal_llm:
             user_tail = ""
         else:
-            user_tail = (
-                sequence_instruction
-                + no_person_instruction
-                + multi_instruction
-                + explicit_instruction
-                + lora_instruction
-                + length_instruction
-            )
+            user_tail = lora_instruction
         user_text = effective_input + user_tail
         if use_lm_studio and vision_images:
             try:

@@ -25,10 +25,10 @@ Dropdowns are built when the node is created or when the server refreshes lists 
 
 ### 3. Wire the graph
 
-1. Bring **two** model branches (typical Wan-style **high-noise** and **low-noise**) with matching **CLIP** on each branch.
-2. Connect **`model_high`** / **`clip_high`** and **`model_low`** / **`clip_low`** into the node.
+1. **Wan:** two branches (high-noise / low-noise) into **`model_high`** / **`model_low`**. **MiniMax:** Switcher → **`minimax_model`**. **Image:** **`image_model`**. **LTX:** **`video_model`**.
+2. Connect CLIP as needed (`clip_high` is the LoRA companion for singular models).
 3. Choose **`subject`**, **`scenario`**, and optionally **`scenario_2`** from the dropdowns (values are relative paths **without** `.txt`).
-4. Optionally wire **`prepend_text`** and **`post_text`** as STRING inputs.
+4. Set **`video_length`** for video graphs (0 skips). Optionally wire **`prepend_text`** and **`post_text`**.
 5. Edit the **live** panes as needed; **queue uses pane text**. Use **Save edits** to persist to `.txt`. Adjust **scenario 2** strength sliders when a second scenario is selected.
 6. Toggle **`pass_subject_to_main_prompt`** if you want the main **`prompt`** to omit the subject file’s description while still exposing it on **`subject_description`**.
 
@@ -43,6 +43,7 @@ Dropdowns are built when the node is created or when the server refreshes lists 
 | `subject_description` | Raw subject-side description text only (no prepend/post); useful when `pass_subject_to_main_prompt` is off but you still need the subject text elsewhere. |
 | `prompt_override` | Scenario **`[Prompt]`** text for LazyPrompt (see node doc); empty when scenarios use **`[desciption]`** only. |
 | `selector` | MiniMax routing string (`[Workflow]`, reference image/audio paths) for Lazy MiniMax All-in-One; empty when those tags are absent. |
+| `minimax_model` / `image_model` / `video_model` | Singular-model outputs after `VideoModelLora*` / `ImageModelLora*`. |
 
 ### 5. Live file preview (extension)
 

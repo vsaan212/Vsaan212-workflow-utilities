@@ -228,8 +228,10 @@ class LazyDocs:
     CATEGORY = "vsaan212/utilities"
 
     def noop(self, docs_subfolder: str = ROOT_LABEL):
+        from ..lazy_logging import debug
         ensure_docs_root()
         _ = normalize_folder_choice(docs_subfolder)
+        debug("Lazy Docs", f"viewer folder {docs_subfolder}")
         return {"ui": {}}
 
 

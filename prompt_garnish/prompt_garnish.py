@@ -4,6 +4,8 @@ Prompt Garnish — append any number of phrases from a customizable list to base
 
 from __future__ import annotations
 
+from ..lazy_logging import debug
+
 
 def _parse_selected_indices(s: str) -> list[int]:
     out: list[int] = []
@@ -78,9 +80,11 @@ class Vsaan_PromptGarnish:
         base = src.rstrip()
 
         if not chosen:
+            debug("Prompt Garnish", "no phrases selected")
             return (base, "")
 
         tail = j.join(chosen)
+        debug("Prompt Garnish", f"appended {len(chosen)} phrase(s)")
         if not base:
             return (tail, tail)
 

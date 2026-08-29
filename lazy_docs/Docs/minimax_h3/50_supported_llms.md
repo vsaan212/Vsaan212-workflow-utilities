@@ -47,6 +47,7 @@ Weights cache under your Hugging Face hub cache (Windows: `%USERPROFILE%\.cache\
 
 The **`target_model`** dropdown is **not** the LLM. It picks the **writing style template** (Model_Skills), for example:
 
+- MiniMax H3 TR2V (text-only T2VA)  
 - MiniMax H3 I2V  
 - MiniMax H3 FL2V  
 - MiniMax H3 R2V  
