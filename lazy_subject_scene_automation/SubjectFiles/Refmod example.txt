@@ -1,0 +1,10 @@
+[LoraHighA]
+bypass
+[LoraLowA]
+bypass
+[VideoModelLoraA]
+bypass
+[Refmod][1.0]
+vanellope_example
+[desciption]
+a candy racer with black hair in pigtails

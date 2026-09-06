@@ -17,6 +17,7 @@ from server import PromptServer
 from ..lazy_logging import debug
 
 MAX_SELECT = 6
+DEFAULT_SHOW_EVERY = 4
 THUMB_MAX_SIDE = 256
 EVENT_NAME = "vsaan212-multi-frame-select"
 POLL_SECONDS = 0.25
@@ -84,21 +85,39 @@ def _tensor_to_pil(frame: torch.Tensor) -> Image.Image:
     return Image.fromarray(arr[..., :3], mode="RGB")
 
 
-def _save_thumbs(batch: torch.Tensor, node_id: str) -> list[dict[str, str]]:
+def _grid_indices(count: int, every: int) -> list[int]:
+    """0-based original frame numbers to show. Always includes the last frame."""
+    every = max(1, int(every or 1))
+    if count <= 0:
+        return []
+    idxs = list(range(0, count, every))
+    last = count - 1
+    if idxs[-1] != last:
+        idxs.append(last)
+    return idxs
+
+
+def _save_thumbs(
+    batch: torch.Tensor, node_id: str, indices: list[int]
+) -> list[dict[str, Any]]:
     temp_dir = folder_paths.get_temp_directory()
     subfolder = "lazy_mfs"
     dest = os.path.join(temp_dir, subfolder)
     os.makedirs(dest, exist_ok=True)
     safe_id = "".join(c if c.isalnum() or c in "-_" else "_" for c in str(node_id))
     stamp = f"{safe_id}_{int(time.time() * 1000)}_{uuid.uuid4().hex[:8]}"
-    results: list[dict[str, str]] = []
-    count = int(batch.shape[0])
-    for i in range(count):
+    results: list[dict[str, Any]] = []
+    n = int(batch.shape[0])
+    for i in indices:
+        if i < 0 or i >= n:
+            continue
         pil = _tensor_to_pil(batch[i])
         pil.thumbnail((THUMB_MAX_SIDE, THUMB_MAX_SIDE), Image.Resampling.LANCZOS)
         filename = f"{stamp}_{i:04d}.jpg"
         pil.save(os.path.join(dest, filename), format="JPEG", quality=75, optimize=True)
-        results.append({"filename": filename, "subfolder": subfolder, "type": "temp"})
+        results.append(
+            {"filename": filename, "subfolder": subfolder, "type": "temp", "index": i}
+        )
     return results
 
 
@@ -150,8 +169,8 @@ class LazyMultiFrameSelect:
     """Show every decoded frame, wait for a pick of up to 6, then emit them."""
 
     DESCRIPTION = (
-        "Takes a VAE Decode IMAGE batch, shows every frame in a grid, pauses "
-        "the workflow until you pick up to 6 frames, then continues."
+        "Takes a VAE Decode IMAGE batch, shows every Nth frame in a grid "
+        "(default 4), pauses until you pick up to 6, then continues."
     )
 
     @classmethod
@@ -164,6 +183,19 @@ class LazyMultiFrameSelect:
                         "tooltip": (
                             "IMAGE batch from VAE Decode (video frames). "
                             "The node pauses until you pick up to 6 frames."
+                        ),
+                    },
+                ),
+                "show_every": (
+                    "INT",
+                    {
+                        "default": DEFAULT_SHOW_EVERY,
+                        "min": 1,
+                        "max": 64,
+                        "step": 1,
+                        "tooltip": (
+                            "Show every Nth frame in the grid (1 = all frames). "
+                            "Default 4. The last frame is always included."
                         ),
                     },
                 ),
@@ -183,7 +215,7 @@ class LazyMultiFrameSelect:
     def IS_CHANGED(cls, **kwargs):
         return float("nan")
 
-    def select(self, images, unique_id=None):
+    def select(self, images, show_every=DEFAULT_SHOW_EVERY, unique_id=None):
         if isinstance(unique_id, (list, tuple)):
             unique_id = unique_id[0] if unique_id else None
         node_id = str(unique_id).strip() if unique_id is not None else ""
@@ -196,7 +228,9 @@ class LazyMultiFrameSelect:
 
         batch = batch.detach().contiguous().cpu()
         prompt_id = str(getattr(PromptServer.instance, "last_prompt_id", "") or "")
-        previews = _save_thumbs(batch, node_id or "node")
+        every = max(1, int(show_every or 1))
+        grid_idxs = _grid_indices(int(batch.shape[0]), every)
+        previews = _save_thumbs(batch, node_id or "node", grid_idxs)
         event = threading.Event()
         session = {
             "event": event,
@@ -215,7 +249,8 @@ class LazyMultiFrameSelect:
 
         debug(
             "Lazy Multi Frame Select",
-            f"waiting on {batch.shape[0]} frames (node {node_id})",
+            f"waiting on {len(grid_idxs)}/{batch.shape[0]} frames "
+            f"(every {every}, node {node_id})",
         )
         _send_to_ui(
             {
@@ -223,6 +258,8 @@ class LazyMultiFrameSelect:
                 "prompt_id": prompt_id,
                 "images": previews,
                 "max_select": MAX_SELECT,
+                "show_every": every,
+                "total_frames": int(batch.shape[0]),
             }
         )
 
@@ -241,12 +278,15 @@ class LazyMultiFrameSelect:
                     _sessions.pop(node_id, None)
 
         outs: list[Any] = [None] * MAX_SELECT
-        selected_ui: list[dict[str, str]] = []
+        preview_by_idx = {
+            int(p["index"]): p for p in previews if p.get("index") is not None
+        }
+        selected_ui: list[dict[str, Any]] = []
         for slot, idx in enumerate(indices[:MAX_SELECT]):
             if 0 <= idx < batch.shape[0]:
                 outs[slot] = batch[idx : idx + 1]
-                if idx < len(previews):
-                    selected_ui.append(previews[idx])
+                if idx in preview_by_idx:
+                    selected_ui.append(preview_by_idx[idx])
 
         debug(
             "Lazy Multi Frame Select",

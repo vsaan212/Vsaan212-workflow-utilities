@@ -12,6 +12,7 @@ Detailed workflow and file-format guides live under **`docs/nodes/`**. End-to-en
 | [nodes/subject-selector.md](nodes/subject-selector.md) | Subject Selector |
 | [nodes/scenario-selector.md](nodes/scenario-selector.md) | Scenario Selector |
 | [nodes/lazy-subject-scene-automation.md](nodes/lazy-subject-scene-automation.md) | Lazy-subject-and-scene-automation |
+| [nodes/lazy-refmod-split.md](nodes/lazy-refmod-split.md) | Lazy-refmod-split (SAS RefMod → Load H3 RefMods) |
 | [nodes/lazy-global-selector.md](nodes/lazy-global-selector.md) | Lazy Global Selector (T2V/I2V/FL2V/R2V) |
 | [nodes/lazy-model-switcher.md](nodes/lazy-model-switcher.md) | Lazy Model Switcher (FL2V vs R2V UNET) |
 | [nodes/lazy-switch.md](nodes/lazy-switch.md) | Lazy Switch (Float / Integer / Text) |

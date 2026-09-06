@@ -11,11 +11,11 @@ Think of the graph as a **video studio remote control**:
 |-------|-----|
 | **Lazy Global Selector** | One dropdown: “text only”, “one start image”, “start+end images”, or “reference images”. Everything else follows this choice. |
 | **Lazy Image Loader(s)** | Load your pictures. Only the ones that match the mode actually send an image; the others stay quiet. |
-| **Subject + Scene automation** | Pick a **character** file and a **scene** file. They can add LoRAs (style/face) and short text descriptions. |
+| **Subject + Scene automation** | Pick a **character** file (or up to three) and a **scene** file. They can add LoRAs, MiniMax RefMods, and short text descriptions. |
 | **LazyPrompt** | Optional helper: turns a short idea into a long MiniMax-style prompt using an LLM. |
 | **Lazy MiniMax All-in-One** | Builds the video conditioning the MiniMax model needs. |
 | **Lazy Model Switcher** | Picks the right UNET (normal video vs reference video). |
-| **Lazy Multi Frame Select** | After **VAE Decode**: grid of every frame, pause, pick up to six stills, Continue. |
+| **Lazy Multi Frame Select** | After **VAE Decode**: grid of every Nth frame (default 4), pause, pick up to six stills, Continue. |
 
 ## Modes in one sentence each
 

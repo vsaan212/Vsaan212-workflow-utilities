@@ -2,6 +2,7 @@ import os
 from typing import List
 
 from ..lazy_logging import debug
+from ..lazy_user_data import selector_subject_files
 
 
 class ComfyUI_subjectselector:
@@ -9,7 +10,7 @@ class ComfyUI_subjectselector:
     Subject selector with recursive subfolder support.
 
     Place .txt files anywhere under:
-      <this_repo>/SubjectFiles/
+      <ComfyUI>/lazynodes/subjectselector/SubjectFiles/
 
     Examples:
       SubjectFiles/
@@ -51,7 +52,7 @@ class ComfyUI_subjectselector:
         Walk SubjectFiles recursively, caching relative POSIX paths WITHOUT .txt
         for all subject files.
         """
-        subject_dir = os.path.join(os.path.dirname(__file__), "SubjectFiles")
+        subject_dir = selector_subject_files()
         cls.root_dir = subject_dir
 
         if not os.path.exists(subject_dir):

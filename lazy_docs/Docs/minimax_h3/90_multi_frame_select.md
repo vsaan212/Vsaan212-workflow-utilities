@@ -5,7 +5,7 @@ index: 90
 
 # Pick frames after VAE Decode
 
-**Lazy Multi Frame Select** sits after **VAE Decode**. It shows every decoded frame in a grid on the node, **pauses** the prompt, and waits until you pick up to **six** stills and click **Continue**.
+**Lazy Multi Frame Select** sits after **VAE Decode**. It shows **every Nth** decoded frame (default **4**) in a grid on the node, **pauses** the prompt, and waits until you pick up to **six** stills and click **Continue**.
 
 Menu: `vsaan212/lazy` → **Lazy Multi Frame Select**. Full reference: the pack file `docs/nodes/lazy-multi-frame-select.md`.
 
@@ -16,7 +16,7 @@ You generated a clip and want a few **keyframes** — start pose, end pose, iden
 ## Quick steps
 
 1. Wire **VAE Decode** `IMAGE` into this node.
-2. Queue. Wait until the grid fills (the node stays executing).
+2. Leave **Show every** at **4** (or set `1` for every frame). Queue. Wait until the grid fills (the node stays executing).
 3. Click up to six frames. Gold badges **1–6** are output order (first click → `image_1`).
 4. Click **Continue** (not Queue again).
 5. Wire `image_1`…`image_6` into MiniMax first/last/refs, Vision Describe, or Save Image.

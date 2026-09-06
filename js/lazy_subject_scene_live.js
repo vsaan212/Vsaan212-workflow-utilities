@@ -5,9 +5,17 @@
 import { app } from "../../scripts/app.js";
 
 const LAZY_API = "/vsaan212/lazy-subject-scene";
-const LIVE_WIDGETS = ["subject_live", "scenario_live", "scenario_2_live"];
+const LIVE_WIDGETS = [
+    "subject_live",
+    "subject_2_live",
+    "subject_3_live",
+    "scenario_live",
+    "scenario_2_live",
+];
 const USE_LIVE_WIDGETS = [
     "subject_use_live",
+    "subject_2_use_live",
+    "subject_3_use_live",
     "scenario_use_live",
     "scenario_2_use_live",
 ];
@@ -98,6 +106,52 @@ function hideLiveWidgets(node) {
     }
 }
 
+function setWidgetShown(node, name, shown) {
+    const w = node.widgets?.find((x) => x.name === name);
+    if (!w) return;
+    w.hidden = !shown;
+    if (shown) {
+        delete w.computeSize;
+    } else {
+        w.computeSize = () => [0, -4];
+    }
+    const row = w.element?.closest?.(".comfy-widget") || w.element?.parentElement;
+    if (row) row.style.display = shown ? "" : "none";
+}
+
+function refmodCount(node) {
+    const w = node.widgets?.find((x) => x.name === "multisubject_refmod");
+    const n = parseInt(w?.value ?? 0, 10);
+    if (!Number.isFinite(n)) return 0;
+    return Math.max(0, Math.min(3, n));
+}
+
+function randomizeOn(node) {
+    return !!node.widgets?.find((x) => x.name === "randomize_subject_in_directory")?.value;
+}
+
+function extraSubjectSlots(node) {
+    const n = refmodCount(node);
+    return n <= 1 ? 1 : n;
+}
+
+function setPaneGroupShown(el, shown) {
+    if (!el) return;
+    el.style.display = shown ? "flex" : "none";
+}
+
+function updateMultiSubjectUi(node) {
+    const slots = extraSubjectSlots(node);
+    const randomize = randomizeOn(node);
+    setWidgetShown(node, "subject_2", slots >= 2 && !randomize);
+    setWidgetShown(node, "subject_3", slots >= 3 && !randomize);
+    setWidgetShown(node, "min_subjects", slots >= 2 && randomize);
+    setPaneGroupShown(node.__lssSubject2Group, slots >= 2 && !randomize);
+    setPaneGroupShown(node.__lssSubject3Group, slots >= 3 && !randomize);
+    ensureNodeMinSize(node);
+    node.setDirtyCanvas?.(true, true);
+}
+
 function relocateWidgetRows(node, names, container) {
     if (!container) return;
     for (const name of names) {
@@ -131,9 +185,13 @@ function syncLiveToProperties(node) {
     node.properties = node.properties || {};
     node.properties.vsaan212_lssa = {
         subject_live: node.__lssSubjectTa?.value ?? "",
+        subject_2_live: node.__lssSubject2Ta?.value ?? "",
+        subject_3_live: node.__lssSubject3Ta?.value ?? "",
         scenario_live: node.__lssScenarioTa?.value ?? "",
         scenario_2_live: node.__lssScenario2Ta?.value ?? "",
         subject_use_live: !!node.widgets?.find((x) => x.name === "subject_use_live")?.value,
+        subject_2_use_live: !!node.widgets?.find((x) => x.name === "subject_2_use_live")?.value,
+        subject_3_use_live: !!node.widgets?.find((x) => x.name === "subject_3_use_live")?.value,
         scenario_use_live: !!node.widgets?.find((x) => x.name === "scenario_use_live")?.value,
         scenario_2_use_live: !!node.widgets?.find((x) => x.name === "scenario_2_use_live")?.value,
         scenario_2_high_strength:
@@ -153,12 +211,14 @@ function setWidgetValue(node, name, value) {
 }
 
 function markPaneLive(node, which) {
-    const flag =
-        which === "subject"
-            ? "subject_use_live"
-            : which === "scenario"
-              ? "scenario_use_live"
-              : "scenario_2_use_live";
+    const flags = {
+        subject: "subject_use_live",
+        subject_2: "subject_2_use_live",
+        subject_3: "subject_3_use_live",
+        scenario: "scenario_use_live",
+        scenario_2: "scenario_2_use_live",
+    };
+    const flag = flags[which] || "scenario_2_use_live";
     setWidgetValue(node, flag, true);
 }
 
@@ -171,6 +231,12 @@ function clearLiveFlags(node) {
 function syncLiveToWidgets(node) {
     if (node.__lssSubjectTa) {
         setWidgetValue(node, "subject_live", node.__lssSubjectTa.value ?? "");
+    }
+    if (node.__lssSubject2Ta) {
+        setWidgetValue(node, "subject_2_live", node.__lssSubject2Ta.value ?? "");
+    }
+    if (node.__lssSubject3Ta) {
+        setWidgetValue(node, "subject_3_live", node.__lssSubject3Ta.value ?? "");
     }
     if (node.__lssScenarioTa) {
         setWidgetValue(node, "scenario_live", node.__lssScenarioTa.value ?? "");
@@ -188,6 +254,12 @@ function syncAllLazyLiveNodesForQueue() {
         applyScenario2StrengthFromSliders(node, false);
         if (String(node.__lssSubjectTa?.value ?? "").trim()) {
             markPaneLive(node, "subject");
+        }
+        if (String(node.__lssSubject2Ta?.value ?? "").trim()) {
+            markPaneLive(node, "subject_2");
+        }
+        if (String(node.__lssSubject3Ta?.value ?? "").trim()) {
+            markPaneLive(node, "subject_3");
         }
         if (String(node.__lssScenarioTa?.value ?? "").trim()) {
             markPaneLive(node, "scenario");
@@ -271,10 +343,14 @@ function setPane(ta, statusEl, text, error, canSaveKey) {
 
 async function fetchReadPair(node) {
     const subj = node.widgets?.find((w) => w.name === "subject");
+    const subj2 = node.widgets?.find((w) => w.name === "subject_2");
+    const subj3 = node.widgets?.find((w) => w.name === "subject_3");
     const scen = node.widgets?.find((w) => w.name === "scenario");
     const scen2 = node.widgets?.find((w) => w.name === "scenario_2");
     const body = {
         subject: subj?.value ?? "none",
+        subject_2: subj2?.value ?? "none",
+        subject_3: subj3?.value ?? "none",
         scenario: scen?.value ?? "none",
         scenario_2: scen2?.value ?? "none",
     };
@@ -289,6 +365,8 @@ async function fetchReadPair(node) {
     } catch (e) {
         data = {
             subject_text: "",
+            subject_2_text: "",
+            subject_3_text: "",
             scenario_text: "",
             scenario_2_text: "",
             subject_error: String(e),
@@ -296,6 +374,8 @@ async function fetchReadPair(node) {
     }
 
     const subjActive = body.subject && body.subject !== "none";
+    const subj2Active = body.subject_2 && body.subject_2 !== "none";
+    const subj3Active = body.subject_3 && body.subject_3 !== "none";
     const scenActive = body.scenario && body.scenario !== "none";
     const scen2Active = body.scenario_2 && body.scenario_2 !== "none";
 
@@ -308,6 +388,26 @@ async function fetchReadPair(node) {
             "__lssCanSaveSubject"
         );
         if (!subjActive) node.__lssCanSaveSubject = false;
+    }
+    if (node.__lssSubject2Ta) {
+        setPane(
+            node.__lssSubject2Ta,
+            node.__lssSubject2Status,
+            subj2Active ? data.subject_2_text ?? "" : "",
+            subj2Active ? data.subject_2_error : null,
+            "__lssCanSaveSubject2"
+        );
+        if (!subj2Active) node.__lssCanSaveSubject2 = false;
+    }
+    if (node.__lssSubject3Ta) {
+        setPane(
+            node.__lssSubject3Ta,
+            node.__lssSubject3Status,
+            subj3Active ? data.subject_3_text ?? "" : "",
+            subj3Active ? data.subject_3_error : null,
+            "__lssCanSaveSubject3"
+        );
+        if (!subj3Active) node.__lssCanSaveSubject3 = false;
     }
     if (node.__lssScenarioTa) {
         setPane(
@@ -337,6 +437,7 @@ async function fetchReadPair(node) {
 
     clearLiveFlags(node);
     syncLiveToWidgets(node);
+    updateMultiSubjectUi(node);
 }
 
 async function saveLiveFiles(node) {
@@ -344,13 +445,27 @@ async function saveLiveFiles(node) {
     syncLiveToWidgets(node);
 
     const subj = node.widgets?.find((w) => w.name === "subject");
+    const subj2 = node.widgets?.find((w) => w.name === "subject_2");
+    const subj3 = node.widgets?.find((w) => w.name === "subject_3");
     const scen = node.widgets?.find((w) => w.name === "scenario");
     const scen2 = node.widgets?.find((w) => w.name === "scenario_2");
 
-    const body = { subject: subj?.value ?? "none", scenario: scen?.value ?? "none", scenario_2: scen2?.value ?? "none" };
+    const body = {
+        subject: subj?.value ?? "none",
+        subject_2: subj2?.value ?? "none",
+        subject_3: subj3?.value ?? "none",
+        scenario: scen?.value ?? "none",
+        scenario_2: scen2?.value ?? "none",
+    };
 
     if (node.__lssCanSaveSubject && String(node.__lssSubjectTa?.value ?? "").trim()) {
         body.subject_text = node.__lssSubjectTa.value;
+    }
+    if (node.__lssCanSaveSubject2 && String(node.__lssSubject2Ta?.value ?? "").trim()) {
+        body.subject_2_text = node.__lssSubject2Ta.value;
+    }
+    if (node.__lssCanSaveSubject3 && String(node.__lssSubject3Ta?.value ?? "").trim()) {
+        body.subject_3_text = node.__lssSubject3Ta.value;
     }
     if (node.__lssCanSaveScenario && String(node.__lssScenarioTa?.value ?? "").trim()) {
         body.scenario_text = node.__lssScenarioTa.value;
@@ -359,7 +474,13 @@ async function saveLiveFiles(node) {
         body.scenario_2_text = node.__lssScenario2Ta.value;
     }
 
-    if (!body.subject_text && !body.scenario_text && !body.scenario_2_text) {
+    if (
+        !body.subject_text &&
+        !body.subject_2_text &&
+        !body.subject_3_text &&
+        !body.scenario_text &&
+        !body.scenario_2_text
+    ) {
         alert("Nothing to save (empty panes or no file selected).");
         return;
     }
@@ -399,27 +520,39 @@ function chainWidgetCallback(widget, fn) {
 
 function restoreFromStored(node) {
     const subj = node.widgets?.find((w) => w.name === "subject");
+    const subj2 = node.widgets?.find((w) => w.name === "subject_2");
+    const subj3 = node.widgets?.find((w) => w.name === "subject_3");
     const scen = node.widgets?.find((w) => w.name === "scenario");
     const scen2 = node.widgets?.find((w) => w.name === "scenario_2");
     const subjLiveW = node.widgets?.find((w) => w.name === "subject_live");
+    const subj2LiveW = node.widgets?.find((w) => w.name === "subject_2_live");
+    const subj3LiveW = node.widgets?.find((w) => w.name === "subject_3_live");
     const scenLiveW = node.widgets?.find((w) => w.name === "scenario_live");
     const scen2LiveW = node.widgets?.find((w) => w.name === "scenario_2_live");
     const stored = node.properties?.vsaan212_lssa;
 
     const subjText = subjLiveW?.value ?? stored?.subject_live ?? "";
+    const subj2Text = subj2LiveW?.value ?? stored?.subject_2_live ?? "";
+    const subj3Text = subj3LiveW?.value ?? stored?.subject_3_live ?? "";
     const scenText = scenLiveW?.value ?? stored?.scenario_live ?? "";
     const scen2Text = scen2LiveW?.value ?? stored?.scenario_2_live ?? "";
     const hasBuffered =
         String(subjText).length > 0 ||
+        String(subj2Text).length > 0 ||
+        String(subj3Text).length > 0 ||
         String(scenText).length > 0 ||
         String(scen2Text).length > 0;
 
     if (!hasBuffered) return false;
 
     node.__lssSubjectTa.value = subjText;
+    if (node.__lssSubject2Ta) node.__lssSubject2Ta.value = subj2Text;
+    if (node.__lssSubject3Ta) node.__lssSubject3Ta.value = subj3Text;
     node.__lssScenarioTa.value = scenText;
     node.__lssScenario2Ta.value = scen2Text;
     node.__lssCanSaveSubject = subj?.value && subj.value !== "none";
+    node.__lssCanSaveSubject2 = subj2?.value && subj2.value !== "none";
+    node.__lssCanSaveSubject3 = subj3?.value && subj3.value !== "none";
     node.__lssCanSaveScenario = scen?.value && scen.value !== "none";
     node.__lssCanSaveScenario2 = scen2?.value && scen2.value !== "none";
 
@@ -438,6 +571,7 @@ function restoreFromStored(node) {
     }
 
     syncLiveToWidgets(node);
+    updateMultiSubjectUi(node);
     return true;
 }
 
@@ -500,11 +634,33 @@ function buildLiveDom(node) {
         return ta;
     };
 
+    const mkGroup = () => {
+        const el = document.createElement("div");
+        el.style.cssText = "display:none;flex-direction:column;gap:6px;width:100%;";
+        return el;
+    };
+
     wrap.appendChild(mkLabel("Subject file (live — used on queue)"));
     const subjTa = mkTa(96, "subject");
     const subjStatus = mkStatus();
     wrap.appendChild(subjTa);
     wrap.appendChild(subjStatus);
+
+    const subj2Group = mkGroup();
+    subj2Group.appendChild(mkLabel("Subject 2 file (live — used on queue)"));
+    const subj2Ta = mkTa(80, "subject_2");
+    const subj2Status = mkStatus();
+    subj2Group.appendChild(subj2Ta);
+    subj2Group.appendChild(subj2Status);
+    wrap.appendChild(subj2Group);
+
+    const subj3Group = mkGroup();
+    subj3Group.appendChild(mkLabel("Subject 3 file (live — used on queue)"));
+    const subj3Ta = mkTa(80, "subject_3");
+    const subj3Status = mkStatus();
+    subj3Group.appendChild(subj3Ta);
+    subj3Group.appendChild(subj3Status);
+    wrap.appendChild(subj3Group);
 
     wrap.appendChild(mkLabel("Scenario file (live — used on queue)"));
     const scenTa = mkTa(96, "scenario");
@@ -524,11 +680,17 @@ function buildLiveDom(node) {
     wrap.appendChild(scen2Status);
 
     node.__lssSubjectTa = subjTa;
+    node.__lssSubject2Ta = subj2Ta;
+    node.__lssSubject3Ta = subj3Ta;
     node.__lssScenarioTa = scenTa;
     node.__lssScenario2Ta = scen2Ta;
     node.__lssSubjectStatus = subjStatus;
+    node.__lssSubject2Status = subj2Status;
+    node.__lssSubject3Status = subj3Status;
     node.__lssScenarioStatus = scenStatus;
     node.__lssScenario2Status = scen2Status;
+    node.__lssSubject2Group = subj2Group;
+    node.__lssSubject3Group = subj3Group;
     node.__lssScenario2SliderHost = sliderHost;
 
     return wrap;
@@ -555,7 +717,7 @@ app.registerExtension({
             const wrap = buildLiveDom(node);
             const domOpts = {
                 getMinHeight: () => 380,
-                getMaxHeight: () => 900,
+                getMaxHeight: () => 1200,
                 getMinWidth: () => NODE_MIN_WIDTH,
             };
             if (typeof node.addDOMWidget === "function") {
@@ -576,12 +738,20 @@ app.registerExtension({
             hideLiveWidgets(node);
 
             const subj = node.widgets?.find((w) => w.name === "subject");
+            const subj2 = node.widgets?.find((w) => w.name === "subject_2");
+            const subj3 = node.widgets?.find((w) => w.name === "subject_3");
             const scen = node.widgets?.find((w) => w.name === "scenario");
             const scen2 = node.widgets?.find((w) => w.name === "scenario_2");
+            const refmodW = node.widgets?.find((w) => w.name === "multisubject_refmod");
+            const randomizeW = node.widgets?.find((w) => w.name === "randomize_subject_in_directory");
 
             chainWidgetCallback(subj, () => fetchReadPair(node));
+            chainWidgetCallback(subj2, () => fetchReadPair(node));
+            chainWidgetCallback(subj3, () => fetchReadPair(node));
             chainWidgetCallback(scen, () => fetchReadPair(node));
             chainWidgetCallback(scen2, () => fetchReadPair(node));
+            chainWidgetCallback(refmodW, () => updateMultiSubjectUi(node));
+            chainWidgetCallback(randomizeW, () => updateMultiSubjectUi(node));
 
             node.addWidget("button", "Save edits", null, () => saveLiveFiles(node));
 
@@ -592,8 +762,12 @@ app.registerExtension({
                 setScenario2SlidersEnabled(node, scen2Active);
             }
 
+            updateMultiSubjectUi(node);
             ensureNodeMinSize(node);
-            requestAnimationFrame(() => ensureNodeMinSize(node));
+            requestAnimationFrame(() => {
+                updateMultiSubjectUi(node);
+                ensureNodeMinSize(node);
+            });
         };
     },
 });

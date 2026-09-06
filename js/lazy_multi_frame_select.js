@@ -97,7 +97,7 @@ function buildUi(node) {
 
     const status = document.createElement("div");
     status.className = "lazy-mfs-status";
-    status.textContent = "Idle — queue the workflow to pick frames from VAE Decode.";
+    status.textContent = "Idle — set Show every, then queue to pick frames from VAE Decode.";
 
     const bar = document.createElement("div");
     bar.className = "lazy-mfs-bar";
@@ -129,6 +129,8 @@ function buildUi(node) {
         images: [],
         selected: [],
         maxSelect: MAX_SELECT,
+        showEvery: 4,
+        totalFrames: 0,
     };
 
     function setStatus(text, mode) {
@@ -139,6 +141,12 @@ function buildUi(node) {
 
     function canEdit() {
         return state.waiting;
+    }
+
+    function origIndex(img, i) {
+        const v = img?.index;
+        const n = Number(v);
+        return Number.isInteger(n) ? n : i;
     }
 
     function render() {
@@ -153,10 +161,11 @@ function buildUi(node) {
             return;
         }
         state.images.forEach((img, i) => {
+            const orig = origIndex(img, i);
             const cell = document.createElement("div");
             cell.className = "lazy-mfs-cell";
             if (!canEdit()) cell.classList.add("disabled");
-            const slot = state.selected.indexOf(i);
+            const slot = state.selected.indexOf(orig);
             if (slot >= 0) {
                 cell.classList.add("selected");
                 const badge = document.createElement("span");
@@ -165,11 +174,11 @@ function buildUi(node) {
                 cell.appendChild(badge);
             }
             const picture = document.createElement("img");
-            picture.alt = `Frame ${i + 1}`;
+            picture.alt = `Frame ${orig + 1}`;
             picture.src = viewUrl(img);
             const idx = document.createElement("span");
             idx.className = "idx";
-            idx.textContent = String(i + 1);
+            idx.textContent = String(orig + 1);
             cell.append(picture, idx);
             cell.addEventListener("pointerdown", (e) => e.stopPropagation());
             cell.addEventListener("mousedown", (e) => e.stopPropagation());
@@ -177,7 +186,7 @@ function buildUi(node) {
                 e.preventDefault();
                 e.stopPropagation();
                 if (!canEdit()) return;
-                toggle(i);
+                toggle(orig);
             });
             grid.appendChild(cell);
         });
@@ -200,11 +209,17 @@ function buildUi(node) {
         continueBtn.disabled = !waiting;
         clearBtn.disabled = !waiting || state.selected.length === 0;
         cancelBtn.disabled = !waiting;
-        const n = state.images.length;
+        const shown = state.images.length;
+        const total = state.totalFrames || shown;
         const picked = state.selected.length;
         if (waiting) {
+            const every = state.showEvery || 1;
+            const stride =
+                every > 1
+                    ? `every ${every}th of ${total} (${shown} in grid)`
+                    : `${total} frames`;
             setStatus(
-                `Waiting — click up to ${state.maxSelect} frames (${picked}/${state.maxSelect} selected, ${n} total). Click again to deselect.`,
+                `Waiting — click up to ${state.maxSelect} frames (${picked}/${state.maxSelect} selected, ${stride}). Click again to deselect.`,
                 "waiting"
             );
         }
@@ -299,6 +314,8 @@ function buildUi(node) {
         state.images = Array.isArray(data.images) ? data.images : [];
         state.selected = [];
         state.maxSelect = Number(data.max_select) || MAX_SELECT;
+        state.showEvery = Number(data.show_every) || 1;
+        state.totalFrames = Number(data.total_frames) || state.images.length;
         updateChrome();
         render();
         hideNativePreview(node);

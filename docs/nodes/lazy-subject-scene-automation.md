@@ -15,6 +15,12 @@ Combines optional-switch LoRA behavior, subject/scenario file selection, and for
 
 **`video_length`** (seconds) replaces **`[video_length]`** in **`prompt`** / **`prompt_override`**, or appends a **`[video_length]`** block. **`[Time]`** is left alone (time of day). Prompt Engineer keeps that block in the LLM user message and uses it for clip duration / beat pacing.
 
+**Recent (v1.17.0):** Multi-character MiniMax H3 **RefMods** ([Luisacaotica](https://github.com/Luisacaotica)/[ComfyUI-MiniMaxH3Mod](https://github.com/Luisacaotica/ComfyUI-MiniMaxH3Mod)): `[Refmod]` in the subject file, **`multisubject_refmod`**, and [Lazy-refmod-split](lazy-refmod-split.md) → Load H3 RefMods. Mode **1+** skips that subject’s LoRAs so identity does not **bleed** across characters. Linked `mod_#` is treated as `(none)` at queue time (no fork of his loader). User libraries live in **`ComfyUI/lazynodes/`**.
+
+**Recent (v1.16.0):** User libraries live in **`ComfyUI/lazynodes/`** (subjects, scenarios, `lazy_prompts.json`) so Manager updates of this pack no longer wipe them. Missing folders/files are created from shipped defaults on startup; existing files are never overwritten.
+
+**Recent (v1.15.0):** **`multisubject_refmod`** 0–3 plus optional **`subject_2`** / **`subject_3`**. Subject files may include **`[Refmod][strength][copies]`** for [ComfyUI-MiniMaxH3Mod](https://github.com/Luisacaotica/ComfyUI-MiniMaxH3Mod). Mode **1+** skips that subject’s LoRAs when `[Refmod]` is present. **`refmod`** output → [Lazy-refmod-split](lazy-refmod-split.md) → Load H3 RefMods.
+
 **Recent (v1.9.3):** **`model_low`** / **`clip_low`** optional (single-model workflows); **`{a|b|c}`** random picks use `secrets` and **`IS_CHANGED`** cache busting so choices vary every queue; live pane sync on queue via **`beforeQueuePrompt`**; non-empty live buffers preferred over disk on run.
 
 **Recent (v1.8.0):** scenario **`[Prompt]`** → **`prompt_override`** output (LazyPrompt **`prompt_override_input`**), **`{a|b|c}`** random choices in scenario text, multiline **`[Prompt]`** bodies (bracket lines no longer truncate), README workflow screenshot + wiring guide.
@@ -23,21 +29,23 @@ Combines optional-switch LoRA behavior, subject/scenario file selection, and for
 
 This node reads **only** from:
 
-- `lazy_subject_scene_automation/SubjectFiles/`
-- `lazy_subject_scene_automation/ScenarioFiles/`
+- `ComfyUI/lazynodes/lazy_subject_scene_automation/SubjectFiles/`
+- `ComfyUI/lazynodes/lazy_subject_scene_automation/ScenarioFiles/`
+
+Those folders sit **next to** `custom_nodes/` (ComfyUI’s install root), so Manager / zip updates of this pack do **not** delete your libraries. On first startup the pack **creates** `lazynodes/` if it is missing and **copies shipped defaults** (and any leftover files still in the old pack folders) **without overwriting** files that already exist.
 
 It does **not** use the folders for [Subject Selector](subject-selector.md) or [Scenario Selector](scenario-selector.md). Copy or symlink `.txt` files if you want the same definitions in both places.
 
 ### Default files (seeding)
 
-When the node refreshes its subject/scenario lists (on node creation, **`R`**, or the lazy `/vsaan212/lazy-subject-scene/…` endpoints), it ensures **`SubjectFiles/`** and **`ScenarioFiles/`** exist. If either folder is missing **`none.txt`** or **`Bypass and format example.txt`**, those files are **created** using the current **v2** minimal bypass template (`[LoraHighA]` / `[LoraLowA]` / `[desciption]`). Existing files are **not** overwritten—pull the repo or edit by hand to adopt a new template.
+When the node refreshes its subject/scenario lists (on node creation, **`R`**, or the lazy `/vsaan212/lazy-subject-scene/…` endpoints), it ensures the **lazynodes** SubjectFiles/ScenarioFiles folders exist. If either folder is missing **`none.txt`** or **`Bypass and format example.txt`**, those files are **created** using the current **v2** minimal bypass template (`[LoraHighA]` / `[LoraLowA]` / `[desciption]`). Existing files are **not** overwritten—pull the repo or edit by hand to adopt a new template.
 
 ## Workflow overview
 
 1. **Wan:** load high-noise into **`model_high`** / **`clip_high`**. For dual stacks also wire **`model_low`** / **`clip_low`**. **MiniMax:** TxtImg UNET + reference UNET → Lazy Model Switcher → **`minimax_model`** (leave High/Low unwired). **Image:** wire **`image_model`**. **LTX:** wire **`video_model`**.
-2. Pick **`subject`**, **`scenario`**, and optionally **`scenario_2`** from the dropdowns (`.txt` paths without extension). Set **`scenario_2`** to `none` when you only need one scenario file.
+2. Pick **`subject`**, **`scenario`**, and optionally **`scenario_2`** from the dropdowns (`.txt` paths without extension). Set **`scenario_2`** to `none` when you only need one scenario file. For MiniMax multi-character RefMods, set **`multisubject_refmod`** to **1**, **2**, or **3** and (when 2–3) pick **`subject_2`** / **`subject_3`**.
 4. Optional: connect **`prepend_text`** / **`post_text`** (STRING sockets only) for framing around the subject description.
-5. Edit **subject / scenario / scenario 2** in the live panes on the node. **Queue uses the pane text**, not necessarily what is on disk. Use **Save edits** to write non-empty panes back to the selected `.txt` files.
+5. Edit **subject / scenario / scenario 2** in the live panes on the node (subject 2 / 3 panes appear when those slots are active). **Queue uses the pane text**, not necessarily what is on disk. Use **Save edits** to write non-empty panes back to the selected `.txt` files.
 6. When **`scenario_2`** is not `none`, use **`scenario_2_high_strength`** and **`scenario_2_low_strength`** to override model strength on the `[LoraHighA]` / `[LoraLowA]` lines in the scenario 2 live text (sliders initialize from the file on load).
 7. Use **`prompt`** for CLIP / preview / downstream text; use **`model_high`** / **`clip_high`** (and optional **`model_low`** / **`clip_low`**) as the conditioned outputs for the rest of the graph.
 8. Use **`keywords`** for trigger tags or secondary conditioning if your workflow needs them.
@@ -56,13 +64,16 @@ Dropdown lists refresh when the node is created; use ComfyUI **`R`** after addin
 | `minimax_model` | MODEL | **Optional.** Singular MiniMax H3 UNET. Wire Lazy Model Switcher here. Receives `VideoModelLoraA–D`. |
 | `image_model` | MODEL | **Optional.** Singular image model (Krea2, Z-Image, Flux, SDXL). Receives `ImageModelLoraA–D`. |
 | `video_model` | MODEL | **Optional.** Singular video UNET (LTX 2.x). Receives `VideoModelLoraA–D`. |
-| `subject` | dropdown | `.txt` under `lazy_subject_scene_automation/SubjectFiles/` (recursive). |
-| `scenario` | dropdown | First scenario `.txt` under `lazy_subject_scene_automation/ScenarioFiles/` (recursive). |
+| `subject` | dropdown | `.txt` under `ComfyUI/lazynodes/lazy_subject_scene_automation/SubjectFiles/` (recursive). Folder seed when **randomize** is ON. |
+| `multisubject_refmod` | INT 0–3 | **0:** one subject, always load file LoRAs. **1:** one subject; skip that subject’s LoRAs if the file has **`[Refmod]`**. **2 / 3:** extra subject dropdowns (up to three characters). Randomize still applies `[Refmod]` LoRA skipping. |
+| `min_subjects` | INT 1–3 | When **randomize** is ON and **`multisubject_refmod`** is 2 or 3: pick at least this many files from the selected subject’s folder (up to the refmod count). **2** with refmod **3** randomly picks 2 or 3. Hidden unless that combination is active. |
+| `subject_2` / `subject_3` | dropdown | Extra subject `.txt` files. Shown when **`multisubject_refmod`** is 2 or 3. Ignored while randomize is ON (picks come from subject 1’s folder). Default `none`. |
+| `scenario` | dropdown | First scenario `.txt` under `ComfyUI/lazynodes/lazy_subject_scene_automation/ScenarioFiles/` (recursive). |
 | `scenario_2` | dropdown | Second scenario `.txt` (same folder and format). Default `none`. Adds up to three more LoRA slots (A/B/C) after scenario 1. |
 | `scenario_2_high_strength` | FLOAT | Overrides `[LoraHighA]` **model** strength in scenario 2 live text (0–10, step 0.01). Sliders sit above the scenario 2 live editor. |
 | `scenario_2_low_strength` | FLOAT | Overrides `[LoraLowA]` **model** strength in scenario 2 live text. Clip strengths in the file are unchanged. |
 | `pass_subject_to_main_prompt` | BOOLEAN | As before. |
-| `randomize_subject_in_directory` | BOOLEAN | **OFF** (default): use the selected `subject` dropdown. **ON**: each queue randomly picks another `.txt` from the **same folder** as the selected subject (e.g. select `cast/alice` → random pick among all files in `SubjectFiles/cast/`). Reads from disk; ignores the live subject pane. |
+| `randomize_subject_in_directory` | BOOLEAN | **OFF** (default): use the selected `subject` / `subject_2` / `subject_3` dropdowns. **ON**: each queue randomly picks `.txt` file(s) from the **same folder** as the selected subject (e.g. select `cast/alice` → random pick among all files in `SubjectFiles/cast/`). Count is **`min_subjects`** through **`multisubject_refmod`** when that is 2 or 3. Reads from disk; ignores live subject panes. `[Refmod]` LoRA skipping still applies. |
 | `video_length` | FLOAT | Clip duration in seconds (0–300, default **0** = skip). Replaces `[video_length]` in `prompt` / `prompt_override`, or appends a `[video_length]` block. Does not change `[Time]` (time of day). MiniMax template sets this to 8. Prompt Engineer keeps the block in the LLM user message. |
 | `prepend_text` | STRING (optional, **socket only**) | Wired text prepended to the built prompt; empty if unconnected. |
 | `post_text` | STRING (optional, **socket only**) | Wired text after the subject block; empty if unconnected. |
@@ -74,20 +85,21 @@ Dropdown lists refresh when the node is created; use ComfyUI **`R`** after addin
 |--------|--------|
 | `prompt` | Readable layout for preview nodes (newlines / blank lines; see below). |
 | `model_high` / `model_low` | After merged LoRA stacks. |
-| `keywords` | `KeywordA/B/C` from the subject file, then scenario 1, then scenario 2, joined with `", "` and a trailing `", "` when non-empty. |
+| `keywords` | `KeywordA/B/C` from subject files (1 then 2 then 3), then scenario 1, then scenario 2, joined with `", "` and a trailing `", "` when non-empty. |
 | `clip_high` / `clip_low` | After the same stacks as the paired model outputs. |
-| `subject_description` | Raw subject-side description only (no prepend/post). |
+| `subject_description` | Raw subject-side description only (no prepend/post). Multiple subjects are joined with a blank line. |
 | `prompt_override` | **Prompt override output** — text from scenario `[Prompt]` blocks (scenario 1 and/or 2). Empty when files use `[desciption]` instead. Wire to LazyPrompt **prompt_override_input**. Not included in the main `prompt` output. |
 | `selector` | MiniMax / media routing blob for [Lazy MiniMax All-in-One](lazy-minimax-all-in-one.md). Built from `[Workflow]`, `[ReferenceImage1]`–`[ReferenceImage5]`, `[AudioReference]` in subject + scenario files (see below). Empty when those tags are absent (unless `global_selector_input` supplies a mode). |
 | `minimax_model` | After `VideoModelLoraA–D` (passthrough if unwired). |
 | `image_model` | After `ImageModelLoraA–D`. |
 | `video_model` | After `VideoModelLoraA–D`. |
+| `refmod` | Tagged blob of up to three `[Refmod1]`–`[Refmod3]` rows from subject files. Empty when no `[Refmod]` tags. Wire to [Lazy-refmod-split](lazy-refmod-split.md). |
 
 ## LoRA application order
 
 On each branch, LoRAs are applied in order:
 
-1. **Subject:** slot A → slot B → slot C (`LoraHighA` / `LoraLowA` through `LoraHighC` / `LoraLowC` in the subject file). Only one subject file is supported.
+1. **Subject 1** (then **subject 2**, then **subject 3** when those slots are active): slot A → slot B → slot C (`LoraHighA` / `LoraLowA` through `LoraHighC` / `LoraLowC` in each subject file). When **`multisubject_refmod` ≥ 1** and that file has a non-bypass **`[Refmod]`**, that subject’s LoRAs (Wan / Image / Video) are skipped.
 2. **Scenario 1:** slot A → slot B → slot C (same tag names in the first scenario file).
 3. **Scenario 2:** slot A → slot B → slot C from the second scenario file when **`scenario_2`** is not `none` (up to six scenario LoRA sets total).
 
@@ -143,6 +155,7 @@ If there is only **one** path section before the description, that single LoRA i
 | `ReferenceImage1` … `ReferenceImage5` | Optional paths under ComfyUI `input/` (e.g. `folder/image.png`). Emitted on **`selector`**. |
 | `AudioReference` | Optional audio path under `input/`. Emitted on **`selector`**. |
 | `description` or `desciption` | Subject description in the final `prompt`. |
+| `Refmod` | Optional MiniMax H3 reference mod for [ComfyUI-MiniMaxH3Mod](https://github.com/Luisacaotica/ComfyUI-MiniMaxH3Mod) **Load H3 RefMods**. Tag line: `[Refmod][strength][copies]`. Body is the dropdown name (e.g. `vanellope_example`); `.safetensors` is stripped if present. Strength defaults to **1.0**; copies (third bracket) defaults to **1** (range 1–10). Example: `ComfyUI/lazynodes/lazy_subject_scene_automation/SubjectFiles/Refmod example.txt`. When **`multisubject_refmod` ≥ 1**, a present `[Refmod]` also **skips that subject’s LoRAs**. |
 
 **Deprecated (still read):** `SubjectLoraHigh` / `SubjectLoraLow` for slot A; `OptionalLoraAHigh` / `OptionalLoraAlow` for slot B; `OptionalLoraBHigh` / `OptionalLoraBlow` for slot C. Prefer the `LoraHigh*` / `LoraLow*` names in new files.
 
@@ -178,6 +191,21 @@ Bypass
 bypass
 [desciption]
 ```
+
+MiniMax H3 RefMod (name matches a **Load H3 RefMods** dropdown; set **`multisubject_refmod`** to 1+ to skip LoRAs when this tag is present):
+
+```text
+[LoraHighA]
+bypass
+[LoraLowA]
+bypass
+[Refmod][1.0]
+vanellope_example
+[desciption]
+a candy racer with black hair in pigtails
+```
+
+Optional third bracket is **copies** (integer 1–10, default 1): `[Refmod][0.85][2]`.
 
 ---
 
@@ -294,7 +322,7 @@ The extension **`js/lazy_subject_scene_live.js`** (loaded via the pack `WEB_DIRE
 
 ### On-node layout (top → bottom)
 
-1. **Subject file (live — used on queue)** — editable textarea.
+1. **Subject file (live — used on queue)** — editable textarea. **Subject 2 / 3** panes appear when **`multisubject_refmod`** is 2 or 3 and randomize is off.
 2. **Scenario file (live — used on queue)** — editable textarea.
 3. **`scenario_2_high_strength`** / **`scenario_2_low_strength`** — standard ComfyUI float widgets (only active when **`scenario_2`** ≠ `none`). Placed above the scenario 2 pane.
 4. **Scenario 2 file (live — used on queue)** — editable textarea.
@@ -318,12 +346,12 @@ Only **scenario 2** has these sliders (extra scenario layer); subject and scenar
 
 ### Hidden sync widgets
 
-`subject_live`, `scenario_live`, `scenario_2_live`, and `subject_use_live` / `scenario_use_live` / `scenario_2_use_live` are hidden on the node but stored in the workflow JSON for queue serialization.
+`subject_live`, `subject_2_live`, `subject_3_live`, `scenario_live`, `scenario_2_live`, and matching `*_use_live` flags are hidden on the node but stored in the workflow JSON for queue serialization.
 
 | Method | Path | Body / notes |
 |--------|------|----------------|
-| `POST` | `/vsaan212/lazy-subject-scene/read_pair` | JSON `subject`, `scenario`, optional `scenario_2` → file texts + optional `*_error` fields. |
-| `POST` | `/vsaan212/lazy-subject-scene/save_live_files` | JSON paths + `subject_text` / `scenario_text` / `scenario_2_text` (only non-empty fields are written). |
+| `POST` | `/vsaan212/lazy-subject-scene/read_pair` | JSON `subject`, `scenario`, optional `scenario_2`, `subject_2`, `subject_3` → file texts + optional `*_error` fields. |
+| `POST` | `/vsaan212/lazy-subject-scene/save_live_files` | JSON paths + `subject_text` / `subject_2_text` / `subject_3_text` / `scenario_text` / `scenario_2_text` (only non-empty fields are written). |
 
 ---
 
@@ -342,3 +370,4 @@ Use **`none.txt`** (or equivalent bypass-only files) in the dropdowns when you w
 
 - [Optional Switch LoRA](optional-switch-lora.md) — same bypass/path semantics for a single LoRA step.
 - [Subject Selector](subject-selector.md) / [Scenario Selector](scenario-selector.md) — load raw text only from different folders.
+- [Lazy-refmod-split](lazy-refmod-split.md) — fan `refmod` into Load H3 RefMods `mod_#` / `strength_#` / `copies_#`.

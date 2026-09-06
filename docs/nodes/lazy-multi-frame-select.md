@@ -2,7 +2,7 @@
 
 **ComfyUI node:** `LazyMultiFrameSelect` · **Menu:** `vsaan212/lazy` · **Display:** Lazy Multi Frame Select · **Pack:** v1.14.0
 
-Takes an **IMAGE** batch (typically **VAE Decode** of a video latent), shows **every frame** in a grid on the node, **pauses the workflow**, and waits until you pick up to **6** frames and click **Continue**. Those stills come out on six IMAGE outputs in **click order**.
+Takes an **IMAGE** batch (typically **VAE Decode** of a video latent), shows frames in a grid on the node (**every Nth** frame, default **4**), **pauses the workflow**, and waits until you pick up to **6** frames and click **Continue**. Those stills come out on six IMAGE outputs in **click order**.
 
 After a ComfyUI / pack update, **restart ComfyUI** so `js/lazy_multi_frame_select.js` loads. A frontend refresh (`R`) is not always enough the first time.
 
@@ -11,6 +11,7 @@ After a ComfyUI / pack update, **restart ComfyUI** so `js/lazy_multi_frame_selec
 | Input | Type | Notes |
 |-------|------|--------|
 | `images` | IMAGE | Batch from VAE Decode (or any IMAGE batch). Shape `(N, H, W, C)`. A single image is treated as a batch of 1. |
+| `show_every` | INT | **Default 4.** Show every Nth frame in the grid (`1` = all frames). The **last** frame is always included so end-of-clip stills stay pickable. |
 
 ## Outputs
 
@@ -18,12 +19,14 @@ After a ComfyUI / pack update, **restart ComfyUI** so `js/lazy_multi_frame_selec
 |--------|------|-------------|
 | `image_1` … `image_6` | IMAGE | Selected frames in **click order**. Unused slots are `None` (safe for optional IMAGE sockets). |
 
-There are no extra widgets. Selection happens on the node UI while the prompt is running.
+There is one widget: **`show_every`**. Set it before you queue. Selection happens on the node UI while the prompt is running.
+
+A 137-frame decode at the default **4** shows about **35** thumbnails (plus the last frame if it was not already on the stride) instead of all 137.
 
 ## Operator flow
 
 1. Wire **VAE Decode** `IMAGE` → this node’s `images`. Wire the six outputs to whatever should receive stills (or leave unused sockets empty).
-2. **Queue Prompt**. Upstream work (sample, decode) runs as usual. When this node is reached it stays **executing** and the grid fills with thumbnails.
+2. Set **`show_every`** (leave **4** unless you need denser or sparser thumbs). **Queue Prompt**. Upstream work (sample, decode) runs as usual. When this node is reached it stays **executing** and the grid fills with thumbnails.
 3. Click frames to select them. A **gold border** and a slot badge **1–6** show pick order. Click a selected frame again to drop it; later badges renumber.
 4. **Continue** — this node finishes and everything downstream runs with the chosen stills.
 5. **Clear** empties the current pick (still waiting). **Cancel** interrupts the whole prompt (same idea as ComfyUI’s stop).
@@ -70,18 +73,18 @@ The node is an **output node**, so it still runs if nothing is connected to the 
 
 `js/lazy_multi_frame_select.js` draws the grid (Comfy’s native image strip on the node is hidden):
 
-- Scrollable thumbnail grid (auto-fill columns)
-- Status: idle / waiting / selected / cancelled
+- Scrollable thumbnail grid (auto-fill columns); only every Nth frame plus the last
+- Status: idle / waiting / selected / cancelled (waiting text includes stride vs total)
 - **Continue**, **Clear**, **Cancel**
 - Dragging on a thumbnail selects it instead of moving the node
 
-Resize the node to see more frames at once. Long clips (e.g. ~100 decoded frames) scroll inside the grid.
+Resize the node to see more frames at once. Use **`show_every`** so a long clip does not dump every decoded frame into the window.
 
 ## Behaviour notes
 
 - The node **always pauses** on every queue (`IS_CHANGED` is never cached). Last run’s grid stays visible until the next wait.
 - Frames are copied to **CPU** before the pause so this node does not keep the GPU batch. Upstream VAE output is still held by the graph until this node finishes.
-- Thumbnails are JPEG previews in Comfy’s **temp** folder (`lazy_mfs/`). Full-resolution tensors are what the six outputs emit.
+- Thumbnails are JPEG previews in Comfy’s **temp** folder (`lazy_mfs/`), only for frames in the grid. Full-resolution tensors from the original batch are what the six outputs emit.
 
 ## API
 

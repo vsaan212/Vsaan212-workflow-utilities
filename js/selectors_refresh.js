@@ -12,6 +12,8 @@ const SELECTORS = {
     LazySubjectSceneAutomation: {
         endpoints: [
             { endpoint: "/vsaan212/lazy-subject-scene/subjects", widgetName: "subject" },
+            { endpoint: "/vsaan212/lazy-subject-scene/subjects", widgetName: "subject_2" },
+            { endpoint: "/vsaan212/lazy-subject-scene/subjects", widgetName: "subject_3" },
             { endpoint: "/vsaan212/lazy-subject-scene/scenarios", widgetName: "scenario" },
             { endpoint: "/vsaan212/lazy-subject-scene/scenarios", widgetName: "scenario_2" },
         ],

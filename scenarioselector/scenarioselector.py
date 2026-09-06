@@ -2,6 +2,7 @@ import os
 from typing import List
 
 from ..lazy_logging import debug
+from ..lazy_user_data import selector_scenario_files
 
 
 class ComfyUI_ScenarioSelector:
@@ -9,7 +10,7 @@ class ComfyUI_ScenarioSelector:
     Scenario selector with recursive subfolder support.
 
     Put .txt files anywhere under:
-      <this_repo>/ScenarioFiles/
+      <ComfyUI>/lazynodes/scenarioselector/ScenarioFiles/
 
     Examples:
       ScenarioFiles/
@@ -51,7 +52,7 @@ class ComfyUI_ScenarioSelector:
         Walk ScenarioFiles recursively, caching:
           - scenarios_relpaths: relative POSIX paths WITHOUT .txt
         """
-        scenario_dir = os.path.join(os.path.dirname(__file__), "ScenarioFiles")
+        scenario_dir = selector_scenario_files()
         cls.root_dir = scenario_dir
 
         if not os.path.exists(scenario_dir):

@@ -57,7 +57,7 @@ Closing tag case does not matter (`[/lora1]` is fine). Empty or `bypass` paths a
 
 Wire **`lora_model`** from SAS **`minimax_model`**, **`video_model`**, or **`image_model`**, then use PE’s **`lora_model`** output downstream. **`lora_clip`** is optional; **`clip_high`** is used if it is empty.
 
-Tell the LLM (via **`user_instructions`** or **`system_prompt`**) to emit these when it picks a LoRA. Authored tags in scenario **`[Prompt]`** / **`prompt_override_input`** are collected even if the LLM drops them; only the final **`PROMPT`** text is stripped. Example scenario file: `lazy_subject_scene_automation/ScenarioFiles/Prompt dynamic Lora example.txt`.
+Tell the LLM (via **`user_instructions`** or **`system_prompt`**) to emit these when it picks a LoRA. Authored tags in scenario **`[Prompt]`** / **`prompt_override_input`** are collected even if the LLM drops them; only the final **`PROMPT`** text is stripped. Example scenario file: `ComfyUI/lazynodes/lazy_subject_scene_automation/ScenarioFiles/Prompt dynamic Lora example.txt`.
 
 ### Operational tips
 

@@ -8,6 +8,10 @@ image_model (Krea2 / Z-Image / Flux) with VideoModelLoraA–D / ImageModelLoraA�
 
 Tagged (v2) files keep LoraHighA/LoraLowA through LoraHighC/LoraLowC
 in both subject and scenario files; older SubjectLora* / ScenarioLora* tags remain supported.
+
+Subject files may include [Refmod][strength][copies] for MiniMax H3 reference mods
+(ComfyUI-MiniMaxH3Mod). multisubject_refmod 0 keeps LoRAs; 1–3 skip subject LoRAs
+when [Refmod] is present and expose a single refmod blob for Lazy-refmod-split.
 """
 from __future__ import annotations
 
@@ -20,6 +24,7 @@ from comfy import model_management
 from nodes import LoraLoader
 
 from ..lazy_logging import debug
+from ..lazy_user_data import sas_scenario_files, sas_subject_files
 
 ApplySlot = Tuple[str, float, float]  # path, strength_model, strength_clip
 
@@ -227,6 +232,124 @@ def _pick_random_subject_in_directory(
     return secrets.choice(pool)
 
 
+def _secrets_sample(seq: List[str], k: int) -> List[str]:
+    remaining = list(seq)
+    out: List[str] = []
+    n = min(max(0, int(k)), len(remaining))
+    for _ in range(n):
+        i = secrets.randbelow(len(remaining))
+        out.append(remaining.pop(i))
+    return out
+
+
+def _pick_random_subjects_in_directory(
+    subjects_relpaths: List[str], selected: str, count: int
+) -> List[str]:
+    """Pick ``count`` unique subject rel paths from the same folder as ``selected``."""
+    rel = _normalize_rel_no_ext(selected)
+    if not rel or rel == "none":
+        return []
+    pool = _subjects_in_directory(subjects_relpaths, _subject_parent_dir(rel))
+    if not pool:
+        return [rel]
+    return _secrets_sample(pool, count)
+
+
+REFMOD_NONE = "(none)"
+_REFMOD_SLOT_COUNT = 3
+
+
+def _clamp_int(value: Any, lo: int, hi: int, default: int) -> int:
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        n = default
+    return max(lo, min(hi, n))
+
+
+def _copies_from_clip_strength(sc: float) -> int:
+    try:
+        n = int(round(float(sc)))
+    except (TypeError, ValueError):
+        n = 1
+    return max(1, min(10, n))
+
+
+def _refmod_name_from_body(body: str) -> str:
+    """First line of [Refmod] body → Load H3 RefMods dropdown name."""
+    text = (body or "").strip()
+    if not text:
+        return ""
+    line = text.splitlines()[0].strip().strip('"').strip("'")
+    if not line or _bypass_path(line) or line.lower() == REFMOD_NONE:
+        return ""
+    base = os.path.basename(line.replace("\\", "/"))
+    lower = base.lower()
+    if lower.endswith(".safetensors"):
+        base = base[: -len(".safetensors")]
+    return base.strip()
+
+
+def _refmod_from_content(content: str) -> Optional[Tuple[str, float, int]]:
+    """Parse subject-file [Refmod][strength][copies]. None when missing or bypass."""
+    content = (content or "").strip().replace("\r\n", "\n").replace("\r", "\n")
+    if not content or not _is_tagged_format(content):
+        return None
+    blocks = _parse_tagged_blocks(content)
+    b = blocks.get(_norm_tag("Refmod"))
+    if not b:
+        return None
+    name = _refmod_name_from_body(b[0])
+    if not name:
+        return None
+    strength = float(b[1]) if b[1] is not None else 1.0
+    copies = _copies_from_clip_strength(b[2] if len(b) > 2 else 1.0)
+    return (name, strength, copies)
+
+
+def _format_refmod_blob(slots: List[Tuple[str, float, int]]) -> str:
+    parts: List[str] = []
+    for i, (name, strength, copies) in enumerate(slots, start=1):
+        n = (name or "").strip()
+        if not n or n.lower() == REFMOD_NONE:
+            continue
+        sm = _format_strength_value(strength)
+        parts.append(f"[Refmod{i}][{sm}][{int(copies)}]\n{n}")
+    return "\n".join(parts)
+
+
+def parse_refmod_blob(text: str) -> List[Tuple[str, float, int]]:
+    """Parse SAS ``refmod`` blob into three (name, strength, copies) slots."""
+    empty: List[Tuple[str, float, int]] = [
+        (REFMOD_NONE, 1.0, 1) for _ in range(_REFMOD_SLOT_COUNT)
+    ]
+    content = (text or "").strip().replace("\r\n", "\n").replace("\r", "\n")
+    if not content:
+        return empty
+    if _is_tagged_format(content):
+        blocks = _parse_tagged_blocks(content)
+        out = list(empty)
+        for i in range(1, _REFMOD_SLOT_COUNT + 1):
+            b = blocks.get(_norm_tag(f"Refmod{i}"))
+            if not b:
+                continue
+            name = _refmod_name_from_body(b[0])
+            if not name:
+                continue
+            out[i - 1] = (
+                name,
+                float(b[1]) if b[1] is not None else 1.0,
+                _copies_from_clip_strength(b[2] if len(b) > 2 else 1.0),
+            )
+        return out
+    return empty
+
+
+def _multisubject_slot_count(multisubject_refmod: Any) -> int:
+    mode = _clamp_int(multisubject_refmod, 0, 3, 0)
+    return 1 if mode <= 1 else mode
+
+
 def _resolve_live_or_disk(
     rel_no_ext: str,
     live: Optional[str],
@@ -249,13 +372,11 @@ def _resolve_live_or_disk(
 
 def _ensure_lazy_seed_txt_files() -> None:
     """
-    If SubjectFiles/ScenarioFiles are missing default .txt files, create them.
+    If user SubjectFiles/ScenarioFiles are missing default .txt files, create them.
     Called when dropdown lists refresh so empty installs still get `none` and the bypass example.
-    Does not overwrite existing files.
+    Does not overwrite existing files. Libraries live under ComfyUI/lazynodes/.
     """
-    pkg_root = os.path.dirname(__file__)
-    for sub in ("SubjectFiles", "ScenarioFiles"):
-        d = os.path.join(pkg_root, sub)
+    for d in (sas_subject_files(), sas_scenario_files()):
         os.makedirs(d, exist_ok=True)
         for fname in ("none.txt", "Bypass and format example.txt"):
             path = os.path.join(d, fname)
@@ -295,7 +416,13 @@ _KNOWN_V2_SECTION_TAGS = frozenset(
         "referenceimage1",
         "referenceimage2",
         "referenceimage3",
+        "referenceimage4",
+        "referenceimage5",
         "audioreference",
+        "refmod",
+        "refmod1",
+        "refmod2",
+        "refmod3",
         "subjectlorahigh",
         "subjectloralow",
         "scenariolorahigh",
@@ -907,9 +1034,11 @@ class LazySubjectSceneAutomation:
     """
     Loads subject + scenario .txt files (v1 # format or v2 tagged format), applies
     LoRA stacks with optional bypass, and assembles prompt + keywords.
-    Files live under this package's SubjectFiles/ and ScenarioFiles/.
-    On list refresh, missing `none.txt` or `Bypass and format example.txt` in either
-    folder are created from the current v2 template (existing files are never overwritten).
+    Files live under ComfyUI/lazynodes/lazy_subject_scene_automation/
+    (SubjectFiles/ and ScenarioFiles/), not inside the pack folder, so Manager
+    updates do not wipe user libraries. On list refresh, missing `none.txt` or
+    `Bypass and format example.txt` in either folder are created from the current
+    v2 template (existing files are never overwritten).
     """
 
     subjects_relpaths: List[str] = []
@@ -920,7 +1049,7 @@ class LazySubjectSceneAutomation:
     @classmethod
     def refresh_subjects_list(cls) -> None:
         _ensure_lazy_seed_txt_files()
-        subject_dir = os.path.join(os.path.dirname(__file__), "SubjectFiles")
+        subject_dir = sas_subject_files()
         cls.subjects_root = subject_dir
         if not os.path.exists(subject_dir):
             os.makedirs(subject_dir, exist_ok=True)
@@ -936,7 +1065,7 @@ class LazySubjectSceneAutomation:
     @classmethod
     def refresh_scenarios_list(cls) -> None:
         _ensure_lazy_seed_txt_files()
-        scenario_dir = os.path.join(os.path.dirname(__file__), "ScenarioFiles")
+        scenario_dir = sas_scenario_files()
         cls.scenarios_root = scenario_dir
         if not os.path.exists(scenario_dir):
             os.makedirs(scenario_dir, exist_ok=True)
@@ -951,21 +1080,32 @@ class LazySubjectSceneAutomation:
 
     @classmethod
     def api_read_pair(
-        cls, subject: str, scenario: str, scenario_2: str = "none"
+        cls,
+        subject: str,
+        scenario: str,
+        scenario_2: str = "none",
+        subject_2: str = "none",
+        subject_3: str = "none",
     ) -> Dict[str, Any]:
         cls.refresh_subjects_list()
         cls.refresh_scenarios_list()
         subj_text, subj_err = _read_txt_under_root(cls.subjects_root, subject)
+        subj2_text, subj2_err = _read_txt_under_root(cls.subjects_root, subject_2)
+        subj3_text, subj3_err = _read_txt_under_root(cls.subjects_root, subject_3)
         scen_text, scen_err = _read_txt_under_root(cls.scenarios_root, scenario)
         scen2_text, scen2_err = _read_txt_under_root(cls.scenarios_root, scenario_2)
         return {
             "subject_text": subj_text,
+            "subject_2_text": subj2_text,
+            "subject_3_text": subj3_text,
             "scenario_text": scen_text,
             "scenario_2_text": scen2_text,
             "subject_error": subj_err,
+            "subject_2_error": subj2_err,
+            "subject_3_error": subj3_err,
             "scenario_error": scen_err,
             "scenario_2_error": scen2_err,
-            "error": subj_err or scen_err or scen2_err,
+            "error": subj_err or subj2_err or subj3_err or scen_err or scen2_err,
         }
 
     @classmethod
@@ -989,6 +1129,8 @@ class LazySubjectSceneAutomation:
                 saved.append(os.path.join(root, rel + ".txt"))
 
         try_save("subject", "subject_text", cls.subjects_root)
+        try_save("subject_2", "subject_2_text", cls.subjects_root)
+        try_save("subject_3", "subject_3_text", cls.subjects_root)
         try_save("scenario", "scenario_text", cls.scenarios_root)
         try_save("scenario_2", "scenario_2_text", cls.scenarios_root)
 
@@ -1014,6 +1156,57 @@ class LazySubjectSceneAutomation:
         return {
             "required": {
                 "subject": (subj_choices,),
+                "multisubject_refmod": (
+                    "INT",
+                    {
+                        "default": 0,
+                        "min": 0,
+                        "max": 3,
+                        "step": 1,
+                        "tooltip": (
+                            "0: one subject, always load file LoRAs (current behavior). "
+                            "1: one subject; skip that subject's LoRAs when the file has [Refmod]. "
+                            "2 or 3: extra subject dropdowns (up to 3 characters). "
+                            "Randomize also applies [Refmod] LoRA skipping. "
+                            "Wire refmod → Lazy-refmod-split → Load H3 RefMods."
+                        ),
+                    },
+                ),
+                "min_subjects": (
+                    "INT",
+                    {
+                        "default": 1,
+                        "min": 1,
+                        "max": 3,
+                        "step": 1,
+                        "tooltip": (
+                            "When randomize is ON and multisubject_refmod is 2 or 3: pick at least "
+                            "this many characters from the selected subject's folder (up to the "
+                            "refmod count). 2 with refmod 3 randomly picks 2 or 3. "
+                            "Ignored when randomize is OFF or refmod is 0–1."
+                        ),
+                    },
+                ),
+                "subject_2": (
+                    subj_choices,
+                    {
+                        "default": "none",
+                        "tooltip": (
+                            "Second subject .txt (same folder/format as subject). "
+                            "Used when multisubject_refmod is 2 or 3. Ignored while randomize is ON."
+                        ),
+                    },
+                ),
+                "subject_3": (
+                    subj_choices,
+                    {
+                        "default": "none",
+                        "tooltip": (
+                            "Third subject .txt. Used when multisubject_refmod is 3. "
+                            "Ignored while randomize is ON."
+                        ),
+                    },
+                ),
                 "scenario": (scen_choices,),
                 "scenario_2": (
                     scen_choices,
@@ -1067,9 +1260,11 @@ class LazySubjectSceneAutomation:
                     {
                         "default": False,
                         "tooltip": (
-                            "ON: each queue picks a random subject .txt from the same folder as the selected subject "
-                            "(SubjectFiles subfolder). Live subject pane is ignored while this is on. "
-                            "OFF: always use the selected subject."
+                            "ON: each queue picks random subject .txt file(s) from the same folder "
+                            "as the selected subject (SubjectFiles subfolder). Live subject panes "
+                            "are ignored while this is on. With multisubject_refmod 2–3, count is "
+                            "min_subjects through the refmod slot count. [Refmod] LoRA skipping "
+                            "still applies. OFF: always use the selected subject dropdown(s)."
                         ),
                     },
                 ),
@@ -1195,6 +1390,22 @@ class LazySubjectSceneAutomation:
                         "tooltip": "Synced by live editor extension (not shown on node).",
                     },
                 ),
+                "subject_2_live": (
+                    "STRING",
+                    {
+                        "default": "",
+                        "hidden": True,
+                        "tooltip": "Synced by live editor extension (not shown on node).",
+                    },
+                ),
+                "subject_3_live": (
+                    "STRING",
+                    {
+                        "default": "",
+                        "hidden": True,
+                        "tooltip": "Synced by live editor extension (not shown on node).",
+                    },
+                ),
                 "scenario_live": (
                     "STRING",
                     {
@@ -1217,6 +1428,22 @@ class LazySubjectSceneAutomation:
                         "default": False,
                         "hidden": True,
                         "tooltip": "When true, queue uses subject_live instead of disk.",
+                    },
+                ),
+                "subject_2_use_live": (
+                    "BOOLEAN",
+                    {
+                        "default": False,
+                        "hidden": True,
+                        "tooltip": "When true, queue uses subject_2_live instead of disk.",
+                    },
+                ),
+                "subject_3_use_live": (
+                    "BOOLEAN",
+                    {
+                        "default": False,
+                        "hidden": True,
+                        "tooltip": "When true, queue uses subject_3_live instead of disk.",
                     },
                 ),
                 "scenario_use_live": (
@@ -1251,6 +1478,7 @@ class LazySubjectSceneAutomation:
         "MODEL",
         "MODEL",
         "MODEL",
+        "STRING",
     )
     RETURN_NAMES = (
         "prompt",
@@ -1265,6 +1493,7 @@ class LazySubjectSceneAutomation:
         "minimax_model",
         "image_model",
         "video_model",
+        "refmod",
     )
     FUNCTION = "run"
     CATEGORY = "vsaan212/automation"
@@ -1306,18 +1535,26 @@ class LazySubjectSceneAutomation:
 
         stable = [
             str(kwargs.get("subject") or ""),
+            str(kwargs.get("subject_2") or ""),
+            str(kwargs.get("subject_3") or ""),
             str(kwargs.get("scenario") or ""),
             str(kwargs.get("scenario_2") or ""),
             str(kwargs.get("subject_live") or ""),
+            str(kwargs.get("subject_2_live") or ""),
+            str(kwargs.get("subject_3_live") or ""),
             str(kwargs.get("scenario_live") or ""),
             str(kwargs.get("scenario_2_live") or ""),
             str(kwargs.get("subject_use_live") or ""),
+            str(kwargs.get("subject_2_use_live") or ""),
+            str(kwargs.get("subject_3_use_live") or ""),
             str(kwargs.get("scenario_use_live") or ""),
             str(kwargs.get("scenario_2_use_live") or ""),
             str(kwargs.get("prepend_text") or ""),
             str(kwargs.get("post_text") or ""),
             str(kwargs.get("pass_subject_to_main_prompt") or ""),
             str(kwargs.get("randomize_subject_in_directory") or ""),
+            str(kwargs.get("multisubject_refmod") or ""),
+            str(kwargs.get("min_subjects") or ""),
             str(kwargs.get("scenario_2_high_strength") or ""),
             str(kwargs.get("scenario_2_low_strength") or ""),
             str(kwargs.get("global_selector_input") or ""),
@@ -1335,6 +1572,10 @@ class LazySubjectSceneAutomation:
         pass_subject_to_main_prompt: bool = True,
         randomize_subject_in_directory: bool = False,
         video_length: float = 0.0,
+        multisubject_refmod: int = 0,
+        min_subjects: int = 1,
+        subject_2: str = "none",
+        subject_3: str = "none",
         model_high=None,
         clip_high=None,
         model_low=None,
@@ -1346,9 +1587,13 @@ class LazySubjectSceneAutomation:
         prepend_text: Optional[str] = None,
         global_selector_input: Optional[str] = None,
         subject_live: Optional[str] = None,
+        subject_2_live: Optional[str] = None,
+        subject_3_live: Optional[str] = None,
         scenario_live: Optional[str] = None,
         scenario_2_live: Optional[str] = None,
         subject_use_live: bool = False,
+        subject_2_use_live: bool = False,
+        subject_3_use_live: bool = False,
         scenario_use_live: bool = False,
         scenario_2_use_live: bool = False,
     ):
@@ -1359,20 +1604,81 @@ class LazySubjectSceneAutomation:
         post = (post_text if post_text is not None else "") or ""
 
         rel_sub = (subject or "").strip().replace("\\", "/").strip("/")
+        rel_sub2 = (subject_2 or "").strip().replace("\\", "/").strip("/")
+        rel_sub3 = (subject_3 or "").strip().replace("\\", "/").strip("/")
         rel_scen = (scenario or "").strip().replace("\\", "/").strip("/")
         rel_scen2 = (scenario_2 or "").strip().replace("\\", "/").strip("/")
 
-        if randomize_subject_in_directory and rel_sub and rel_sub != "none":
-            rel_sub = _pick_random_subject_in_directory(self.subjects_relpaths, rel_sub)
+        mode = _clamp_int(multisubject_refmod, 0, 3, 0)
+        skip_loras_if_refmod = mode >= 1
+        max_slots = _multisubject_slot_count(mode)
 
         preview_err: List[str] = []
-        subj_raw, subj_err = _resolve_live_or_disk(
-            rel_sub,
-            subject_live,
-            self.subjects_root,
-            subject_use_live,
-            force_disk=randomize_subject_in_directory,
-        )
+        subject_jobs: List[Tuple[str, Optional[str], bool, bool]] = []
+        if randomize_subject_in_directory and rel_sub and rel_sub != "none":
+            lo = max(1, min(_clamp_int(min_subjects, 1, 3, 1), max_slots))
+            hi = max_slots
+            n = lo if hi <= lo else lo + secrets.randbelow(hi - lo + 1)
+            picked = _pick_random_subjects_in_directory(
+                self.subjects_relpaths, rel_sub, n
+            )
+            debug(
+                "SAS",
+                f"random subjects ({len(picked)} of {n} requested): {', '.join(picked) or '(none)'}",
+            )
+            for rel in picked:
+                subject_jobs.append((rel, None, False, True))
+        else:
+            specs = [(rel_sub, subject_live, subject_use_live)]
+            if max_slots >= 2:
+                specs.append((rel_sub2, subject_2_live, subject_2_use_live))
+            if max_slots >= 3:
+                specs.append((rel_sub3, subject_3_live, subject_3_use_live))
+            for rel, live, use_live in specs:
+                subject_jobs.append((rel, live, bool(use_live), False))
+
+        sh: List[ApplySlot] = []
+        sl: List[ApplySlot] = []
+        img_s: List[ApplySlot] = []
+        vid_s: List[ApplySlot] = []
+        desc_parts: List[str] = []
+        skw: List[str] = []
+        subj_raws: List[str] = []
+        ref_slots: List[Tuple[str, float, int]] = []
+
+        for rel, live, use_live, force_disk in subject_jobs:
+            raw, err = _resolve_live_or_disk(
+                rel,
+                live,
+                self.subjects_root,
+                use_live,
+                force_disk=force_disk,
+            )
+            if err:
+                preview_err.append(f"subject file ({rel}): {err}")
+            subj_raws.append(raw)
+            hi_s, lo_s, sdesc, kw = parse_subject_text(raw)
+            img_one, vid_one = _singular_stacks_from_text(raw)
+            ref = _refmod_from_content(raw)
+            if skip_loras_if_refmod and ref is not None:
+                debug(
+                    "SAS",
+                    f'skipped subject LoRAs for "{rel}" — [Refmod] present',
+                )
+                hi_s, lo_s, img_one, vid_one = [], [], [], []
+            sh.extend(hi_s)
+            sl.extend(lo_s)
+            img_s.extend(img_one)
+            vid_s.extend(vid_one)
+            if (sdesc or "").strip():
+                desc_parts.append(sdesc.strip())
+            skw.extend(kw)
+            if ref is not None:
+                ref_slots.append(ref)
+
+        sdesc = _combine_scenario_descriptions(*desc_parts)
+        refmod_blob = _format_refmod_blob(ref_slots)
+
         scen_raw, scen_err = _resolve_live_or_disk(
             rel_scen, scenario_live, self.scenarios_root, scenario_use_live
         )
@@ -1383,18 +1689,14 @@ class LazySubjectSceneAutomation:
             scen2_raw = _apply_scenario2_strength_overrides(
                 scen2_raw, scenario_2_high_strength, scenario_2_low_strength
             )
-        if subj_err:
-            preview_err.append(f"subject file: {subj_err}")
         if scen_err:
             preview_err.append(f"scenario file: {scen_err}")
         if scen2_err:
             preview_err.append(f"scenario 2 file: {scen2_err}")
 
-        sh, sl, sdesc, skw = parse_subject_text(subj_raw)
         ch, cl, cdesc, ckw, cprompt = parse_scenario_text(scen_raw)
         ch2, cl2, cdesc2, ckw2, cprompt2 = parse_scenario_text(scen2_raw)
 
-        img_s, vid_s = _singular_stacks_from_text(subj_raw)
         img_c, vid_c = _singular_stacks_from_text(scen_raw)
         img_c2, vid_c2 = _singular_stacks_from_text(scen2_raw)
 
@@ -1475,7 +1777,7 @@ class LazySubjectSceneAutomation:
             )
 
         fields = _merge_minimax_selector_fields(
-            _minimax_fields_from_content(subj_raw),
+            *[_minimax_fields_from_content(raw) for raw in subj_raws],
             _minimax_fields_from_content(scen_raw),
             _minimax_fields_from_content(scen2_raw),
         )
@@ -1509,6 +1811,7 @@ class LazySubjectSceneAutomation:
             mm_out,
             img_out,
             vid_out,
+            refmod_blob,
         )
 
 

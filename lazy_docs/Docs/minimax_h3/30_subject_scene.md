@@ -8,7 +8,7 @@ index: 30
 There are two related ideas in this pack:
 
 1. **Standalone Subject Selector / Scenario Selector** — each loads one `.txt` file and outputs text.  
-2. **Lazy Subject + Scene Automation** (the big node) — picks **one subject** + **one or two scenarios**, applies LoRAs, and builds prompt pieces for MiniMax / LazyPrompt.
+2. **Lazy Subject + Scene Automation** (the big node) — picks **one to three subjects** + **one or two scenarios**, applies LoRAs (or MiniMax RefMods), and builds prompt pieces for MiniMax / LazyPrompt.
 
 For the MiniMax all-in-one graph you almost always use the **automation** node.
 
@@ -16,11 +16,11 @@ For the MiniMax all-in-one graph you almost always use the **automation** node.
 
 | Node | Folder |
 |------|--------|
-| Lazy Subject + Scene Automation | `lazy_subject_scene_automation/SubjectFiles/` and `…/ScenarioFiles/` |
-| Standalone Subject Selector | `subjectselector/SubjectFiles/` |
-| Standalone Scenario Selector | `scenarioselector/ScenarioFiles/` |
+| Lazy Subject + Scene Automation | `ComfyUI/lazynodes/lazy_subject_scene_automation/SubjectFiles/` and `…/ScenarioFiles/` |
+| Standalone Subject Selector | `ComfyUI/lazynodes/subjectselector/SubjectFiles/` |
+| Standalone Scenario Selector | `ComfyUI/lazynodes/scenarioselector/ScenarioFiles/` |
 
-These folders are **separate**. Copy a file if you want the same character in both places.
+These folders are **separate** (all under `ComfyUI/lazynodes/`). Copy a file if you want the same character in both places. Pack updates do not wipe `lazynodes/`.
 
 ## Mental model
 
@@ -82,4 +82,27 @@ For MiniMax you often only wire **`model_high`** / **`clip_high`**. Leave the lo
 
 ## Random subject in a folder
 
-If **randomize subject in directory** is ON, each queue picks another `.txt` from the **same folder** as the selected subject (great for a `cast/` folder of characters).
+If **randomize subject in directory** is ON, each queue picks another `.txt` from the **same folder** as the selected subject (great for a `cast/` folder of characters). With **`multisubject_refmod`** set to **2** or **3**, **`min_subjects`** is the fewest characters to draw (for example **2** with refmod **3** picks 2 or 3 files).
+
+## MiniMax H3 RefMods (multi-subject)
+
+This is the multi-character identity path. Character LoRAs stacked on one graph **bleed** into each other. **[Luisacaotica](https://github.com/Luisacaotica)**’s [ComfyUI-MiniMaxH3Mod](https://github.com/Luisacaotica/ComfyUI-MiniMaxH3Mod) RefMods keep each person on MiniMax H3’s native reference tokens instead — extract a mod per character, then load them here.
+
+Install that pack. Put `.safetensors` mods where it looks (`models/refmods/` root; subfolders are not listed by Load H3 RefMods yet). In a subject file:
+
+```text
+[Refmod][1.0]
+vanellope_example
+[desciption]
+a candy racer with black hair in pigtails
+```
+
+On the automation node:
+
+1. Set **`multisubject_refmod`** to **1** (one character), **2**, or **3**. At **0**, LoRAs still load even if `[Refmod]` is in the file. At **1+**, `[Refmod]` **turns that subject’s LoRAs off** (identity comes from the RefMod instead).
+2. For two or three named characters, pick **`subject_2`** / **`subject_3`**. Randomize uses the same folder as **subject**.
+3. Wire **`refmod`** → **Lazy-refmod-split** → **Load H3 RefMods** (`mod_1` / `strength_1` / `copies_1`, and 2 / 3). Convert those loader widgets **to inputs**. Then **Apply H3 RefMod** as usual.
+
+Load H3 RefMods validates **before** SAS runs, so a linked `mod_#` is empty at queue time. This pack patches that check so `'None' not found in mods/` does not block the queue. You do not need to copy their loader into this repo. Restart ComfyUI after updating.
+
+Random subject picks also honor `[Refmod]` (skip LoRAs when mode is 1+).

@@ -8,7 +8,9 @@ class StorageManager:
 
     @staticmethod
     def _get_filepath():
-        return os.path.join(os.path.dirname(os.path.abspath(__file__)), "lazy_prompts.json")
+        from ..lazy_user_data import lazy_prompts_path
+
+        return lazy_prompts_path()
 
     @classmethod
     def load_prompts(cls):

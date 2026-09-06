@@ -1,10 +1,17 @@
-__version__ = "1.14.0"
+__version__ = "1.17.0"
 __author__ = "Vsaan212"
 __title__ = "Vsaan212 Workflow Utilities"
 # custom_nodes/vsaan212_workflow_utilities/__init__.py
 import os
 
 WEB_DIRECTORY = "./js"
+
+try:
+    from .lazy_user_data import ensure_seeded
+
+    ensure_seeded()
+except Exception:
+    pass
 
 # --- Robust imports for each submodule (handles legacy filenames too) ---
 # Text Split
@@ -71,10 +78,10 @@ except Exception:
             NODE_DISPLAY_NAME_MAPPINGS as SUBJ_DISPLAY,
         )
 
-# Lazy Subject + Scene Automation (v2 combined node)
+# Lazy Subject + Scene Automation (v2 combined node) + refmod split
 LazySubjectSceneAutomation = None
 try:
-    from .lazy_subject_scene_automation.lazy_subject_scene_automation import (
+    from .lazy_subject_scene_automation import (
         NODE_CLASS_MAPPINGS as LSSA_CLASSES,
         NODE_DISPLAY_NAME_MAPPINGS as LSSA_DISPLAY,
         LazySubjectSceneAutomation as _LazySubjectSceneAutomation,
@@ -82,7 +89,7 @@ try:
     LazySubjectSceneAutomation = _LazySubjectSceneAutomation
 except Exception:
     try:
-        from .lazy_subject_scene_automation import (
+        from .lazy_subject_scene_automation.lazy_subject_scene_automation import (
             NODE_CLASS_MAPPINGS as LSSA_CLASSES,
             NODE_DISPLAY_NAME_MAPPINGS as LSSA_DISPLAY,
             LazySubjectSceneAutomation as _LazySubjectSceneAutomation,
@@ -251,6 +258,8 @@ if LazySubjectSceneAutomation is not None:
             body.get("subject") or "none",
             body.get("scenario") or "none",
             body.get("scenario_2") or "none",
+            body.get("subject_2") or "none",
+            body.get("subject_3") or "none",
         )
         return web.json_response(data)
 
@@ -330,3 +339,18 @@ NODE_DISPLAY_NAME_MAPPINGS.update(LGN_DISPLAY)
 
 NODE_CLASS_MAPPINGS.update(LD_CLASSES)
 NODE_DISPLAY_NAME_MAPPINGS.update(LD_DISPLAY)
+
+# Load H3 RefMods VALIDATE_INPUTS runs before SAS / Lazy-refmod-split, so linked
+# mod_# is Python None ("None" not in mods/). Treat unresolved names as (none).
+try:
+    from .lazy_h3_refmod_compat import patch_minimax_h3_refmods_validate
+
+    patch_minimax_h3_refmods_validate()
+
+    def _vsaan212_patch_h3_refmod_validate(json_data):
+        patch_minimax_h3_refmods_validate()
+        return json_data
+
+    PromptServer.instance.add_on_prompt_handler(_vsaan212_patch_h3_refmod_validate)
+except Exception:
+    pass
